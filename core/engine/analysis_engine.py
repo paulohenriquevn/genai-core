@@ -3,11 +3,23 @@ Motor de análise principal que integra todos os componentes do sistema.
 """
 
 import os
+import sys
 import logging
 import pandas as pd
 import time
 import json
 from typing import Dict, List, Optional, Any, Union
+
+# Adiciona o diretório raiz ao path para facilitar importações
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
+# Tenta importar os conectores no início do módulo
+try:
+    from connector.data_connector_factory import DataConnectorFactory
+    from connector.datasource_config import DataSourceConfig
+    _CONNECTORS_AVAILABLE = True
+except ImportError:
+    _CONNECTORS_AVAILABLE = False
 
 # Importação dos componentes core
 from core.code_executor import AdvancedDynamicCodeExecutor
@@ -179,11 +191,55 @@ class AnalysisEngine:
             if isinstance(data, str):
                 logger.info(f"Carregando dados do arquivo: {data}")
                 
-                # Determina o tipo de arquivo pela extensão
+                # Determina o tipo de arquivo pela extensão e cria o conector apropriado
                 if data.endswith('.csv'):
-                    df = pd.read_csv(data)
+                    # Verificamos se os módulos já foram importados no início do arquivo
+                    if _CONNECTORS_AVAILABLE:
+                        try:
+                            config = DataSourceConfig.from_dict({
+                                "id": name,
+                                "source_type": "duckdb_csv",
+                                "path": data
+                            })
+                            
+                            connector = DataConnectorFactory.create_connector(config)
+                            connector.connect()
+                            df = connector.read_data()
+                            # Armazenamos o conector para consultas futuras
+                            self.datasets[name + "_connector"] = connector
+                            logger.info(f"Usando DuckDB para carregar arquivo CSV: {data}")
+                        except Exception as e:
+                            logger.warning(f"Erro ao usar DuckDB para CSV: {str(e)}. Usando pandas diretamente.")
+                            df = pd.read_csv(data)
+                    else:
+                        logger.warning(f"Conectores não disponíveis. Usando pandas diretamente.")
+                        df = pd.read_csv(data)
+                    
                 elif data.endswith(('.xls', '.xlsx')):
-                    df = pd.read_excel(data)
+                    # Verificamos se os módulos já foram importados no início do arquivo
+                    if _CONNECTORS_AVAILABLE:
+                        try:
+                            config = DataSourceConfig.from_dict({
+                                "id": name,
+                                "source_type": "duckdb_xls",
+                                "path": data,
+                                "sheet_name": "all",
+                                "create_combined_view": True
+                            })
+                            
+                            connector = DataConnectorFactory.create_connector(config)
+                            connector.connect()
+                            df = connector.read_data()
+                            # Armazenamos o conector para consultas futuras
+                            self.datasets[name + "_connector"] = connector
+                            logger.info(f"Usando DuckDB para carregar arquivo Excel: {data}")
+                        except Exception as e:
+                            logger.warning(f"Erro ao usar DuckDB para Excel: {str(e)}. Usando pandas diretamente.")
+                            df = pd.read_excel(data)
+                    else:
+                        logger.warning(f"Conectores não disponíveis. Usando pandas diretamente.")
+                        df = pd.read_excel(data)
+                    
                 elif data.endswith('.json'):
                     df = pd.read_json(data)
                 elif data.endswith('.parquet'):
@@ -201,270 +257,367 @@ class AnalysisEngine:
                 else:
                     description = f"Dataset {name}"
             
-            # Preprocessa o DataFrame para garantir compatibilidade com SQL
-            df = self._preprocess_dataframe_for_sql(df, name)
-            
-            # Cria objeto Dataset
-            dataset = Dataset(dataframe=df, name=name, description=description, schema=schema)
-            
-            # Armazena para uso futuro e adiciona ao estado do agente
+            # Cria o objeto Dataset para armazenar os dados e metadados
+            dataset = Dataset(df, name, description, schema)
             self.datasets[name] = dataset
             
-            # Atualiza a lista no estado do agente com objetos Dataset
-            self.agent_state.dfs.append(dataset)
+            # Atualiza a lista de dataframes no estado do agente
+            self.agent_state.dfs = list(self.datasets.values())
             
-            # Inicializa ou atualiza componentes dependentes
-            # SQLExecutor precisa dos datasets para configuração
-            self.sql_executor = SQLExecutor(self.datasets)
+            # Inicializa/atualiza o executor SQL com os novos dados
+            if self.sql_executor is None:
+                self.sql_executor = SQLExecutor(datasets=self.datasets)
+            else:
+                self.sql_executor.update_datasets(self.datasets)
             
-            # AlternativeFlow precisa dos datasets para gerar alternativas
-            self.alternative_flow = AlternativeFlow(self.datasets, self.query_generator)
+            # Inicializa/atualiza o módulo de fluxo alternativo
+            if self.alternative_flow is None:
+                self.alternative_flow = AlternativeFlow(
+                    datasets=self.datasets,
+                    llm_generator=self.query_generator
+                )
+            else:
+                self.alternative_flow.update_datasets(self.datasets)
             
-            logger.info(f"Dataset '{name}' carregado com {len(df)} linhas e {len(df.columns)} colunas")
-        
+            logger.info(f"Dataset '{name}' carregado com {len(df)} registros e {len(df.columns)} colunas.")
+            
         except Exception as e:
-            logger.error(f"Erro ao carregar dados: {str(e)}")
-            raise
+            error_msg = f"Erro ao carregar dados: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
     
-    def _preprocess_dataframe_for_sql(self, df: pd.DataFrame, name: str) -> pd.DataFrame:
+    def __del__(self):
         """
-        Prepara um DataFrame para uso em consultas SQL, garantindo compatibilidade com DuckDB.
+        Método destrutor para limpar recursos.
+        """
+        # Fecha conexões de conectores
+        for key, value in self.datasets.items():
+            if key.endswith("_connector") and hasattr(value, 'close'):
+                try:
+                    value.close()
+                except:
+                    pass
+
+        # Fecha as conexões com DuckDB se existirem
+        if hasattr(self, 'sql_executor') and self.sql_executor:
+            try:
+                self.sql_executor.close()
+            except:
+                pass
+
+        # Fecha as conexões LLM se existirem
+        if hasattr(self, 'query_generator') and self.query_generator:
+            try:
+                self.query_generator.close_connections()
+            except:
+                pass
+    
+    def generate_analysis(self, result: BaseResponse, query: str) -> str:
+        """
+        Gera uma análise automatizada do resultado de uma consulta.
         
         Args:
-            df: DataFrame a ser preprocessado
-            name: Nome do dataset (para logging)
+            result: Objeto de resposta obtido
+            query: Consulta original
             
         Returns:
-            DataFrame preprocessado
+            str: Texto com análise do resultado
         """
+        if result.type == "dataframe":
+            df = result.value
+            analysis = [f"A consulta retornou {len(df)} registros com {len(df.columns)} colunas."]
+            
+            # Análise adicional se tivermos poucas linhas
+            if len(df) <= 10:
+                analysis.append("Conjunto de resultados pequeno, pode ser necessário expandir a consulta para obter mais dados.")
+                
+            # Verifica valores nulos
+            null_counts = df.isnull().sum()
+            if null_counts.any():
+                cols_with_nulls = [f"{col} ({null_counts[col]} valores)" for col in null_counts.index if null_counts[col] > 0]
+                if cols_with_nulls:
+                    analysis.append(f"Colunas com valores nulos: {', '.join(cols_with_nulls)}")
+                    
+            # Verifica colunas numéricas
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                # Calcula estatísticas básicas para colunas numéricas
+                stats = df[numeric_cols].describe().to_dict()
+                for col in numeric_cols[:2]:  # Limita a 2 colunas para não sobrecarregar
+                    col_stats = stats[col]
+                    analysis.append(f"Estatísticas para '{col}': Min={col_stats['min']:.2f}, Média={col_stats['mean']:.2f}, Max={col_stats['max']:.2f}")
+            
+            return "\n".join(analysis)
+            
+        elif result.type == "chart":
+            analysis = [f"Visualização gerada com base na consulta: '{query}'."]
+            
+            # Se temos informações de séries no gráfico
+            if result.chart_format == "apex" and isinstance(result.value, dict):
+                config = result.value
+                if "series" in config:
+                    series_count = len(config["series"]) if isinstance(config["series"], list) else 1
+                    analysis.append(f"O gráfico contém {series_count} série(s) de dados.")
+                    
+                if "title" in config and "text" in config["title"]:
+                    analysis.append(f"Título do gráfico: {config['title']['text']}.")
+                    
+            return "\n".join(analysis)
+            
+        elif result.type == "number":
+            return f"O valor numérico obtido foi {result.value}."
+            
+        elif result.type == "string":
+            return f"A resposta obtida é: '{result.value[:100]}{'...' if len(result.value) > 100 else ''}'."
+            
+        else:
+            return f"Consulta processada com sucesso."
+    
+    def generate_chart(
+        self,
+        data: pd.DataFrame,
+        chart_type: str = "bar",
+        x: Optional[Union[str, List[str]]] = None,
+        y: Optional[Union[str, List[str]]] = None,
+        title: Optional[str] = None,
+        chart_format: str = "apex"
+    ) -> ChartResponse:
+        """
+        Gera um gráfico a partir de um DataFrame.
+        
+        Args:
+            data: DataFrame com os dados para o gráfico
+            chart_type: Tipo de gráfico (bar, line, pie, area, scatter, etc)
+            x: Coluna(s) ou índice para o eixo X
+            y: Coluna(s) para o eixo Y
+            title: Título do gráfico
+            chart_format: Formato de saída ('apex' para ApexCharts)
+            
+        Returns:
+            ChartResponse: Resposta contendo o gráfico gerado
+        """
+        # Implementação para gráficos do tipo ApexCharts
+        if chart_format.lower() == "apex":
+            return self._generate_apex_chart(data, chart_type, x, y, title)
+            
+        # Fallback para implementação matplotlib (ou outros no futuro)
+        return self._generate_basic_chart(data, chart_type, x, y, title)
+    
+    def _generate_apex_chart(
+        self,
+        data: pd.DataFrame,
+        chart_type: str,
+        x: Optional[Union[str, List[str]]],
+        y: Optional[Union[str, List[str]]],
+        title: Optional[str]
+    ) -> ChartResponse:
+        """
+        Gera um gráfico no formato ApexCharts (JSON).
+        
+        Args:
+            data: DataFrame com os dados
+            chart_type: Tipo de gráfico
+            x: Coluna(s) para o eixo X
+            y: Coluna(s) para o eixo Y
+            title: Título do gráfico
+            
+        Returns:
+            ChartResponse: Objeto de resposta com configuração ApexCharts
+        """
+        # Usa o conversor apropriado de utils
+        from utils.chart_converters import dataframe_to_apex
+        
+        # Conversão de tipos de gráfico para formato compatível
+        chart_type_mapping = {
+            "bar": "bar",
+            "column": "bar",
+            "line": "line",
+            "area": "area",
+            "pie": "pie",
+            "donut": "donut",
+            "scatter": "scatter",
+            "bubble": "bubble",
+            "heatmap": "heatmap",
+            "radialBar": "radialBar",
+            "radar": "radar",
+            "candlestick": "candlestick"
+        }
+        
+        # Padroniza o tipo de gráfico
+        normalized_type = chart_type_mapping.get(chart_type.lower(), "bar")
+        
+        # Configura o título
+        if title is None:
+            title = f"Gráfico de {normalized_type.capitalize()}"
+            if y and isinstance(y, str):
+                title = f"{title} - {y}"
+        
+        # Gera o gráfico com ApexCharts
         try:
-            # Cria cópia para evitar alterações no original
-            processed_df = df.copy()
+            apex_config = dataframe_to_apex(
+                df=data,
+                chart_type=normalized_type,
+                x_column=x,
+                y_columns=y if isinstance(y, list) else [y] if y else None,
+                title=title
+            )
             
-            # Converte colunas de data para o formato correto
-            for col in processed_df.columns:
-                # Verifica se a coluna parece ser uma data
-                if processed_df[col].dtype == 'object':
-                    try:
-                        # Tenta usar expressão regular para identificar padrões de data
-                        if processed_df[col].str.contains(r'\d{4}-\d{2}-\d{2}').any():
-                            logger.info(f"Convertendo coluna {col} para datetime no dataset {name}")
-                            processed_df[col] = pd.to_datetime(processed_df[col], errors='ignore')
-                    except (AttributeError, TypeError):
-                        # Ignora erros para colunas que não são strings ou com valores mistos
-                        pass
-            
-            # Remove caracteres especiais dos nomes das colunas
-            rename_map = {}
-            for col in processed_df.columns:
-                # Substitui espaços e caracteres especiais por underscores
-                new_col = col
-                if ' ' in col or any(c in col for c in '!@#$%^&*()-+?_=,<>/\\|{}[]'):
-                    new_col = ''.join(c if c.isalnum() else '_' for c in col)
-                    rename_map[col] = new_col
-            
-            # Renomeia colunas se necessário
-            if rename_map:
-                logger.info(f"Renomeando colunas com caracteres especiais no dataset {name}: {rename_map}")
-                processed_df = processed_df.rename(columns=rename_map)
-            
-            # Verifica e corrige tipos de dados problemáticos
-            for col in processed_df.columns:
-                # Tenta converter colunas mistas para string quando apropriado
-                if processed_df[col].dtype == 'object' and not pd.api.types.is_datetime64_any_dtype(processed_df[col]):
-                    # Se a coluna tem valores mistos, converte para string
-                    try:
-                        unique_types = processed_df[col].apply(type).nunique()
-                        if unique_types > 1:
-                            logger.info(f"Convertendo coluna {col} com tipos mistos para string no dataset {name}")
-                            processed_df[col] = processed_df[col].astype(str)
-                    except:
-                        # Em caso de erro, força para string
-                        processed_df[col] = processed_df[col].astype(str)
-            
-            return processed_df
+            # Retorna com formato apex
+            return ChartResponse(
+                value={"format": "apex", "config": apex_config},
+                chart_format="apex"
+            )
             
         except Exception as e:
-            logger.warning(f"Erro durante preprocessamento do DataFrame {name}: {str(e)}")
-            # Em caso de erro, retorna o DataFrame original
-            return df
+            logger.error(f"Erro ao gerar gráfico ApexCharts: {str(e)}")
+            # Fallback para implementação básica
+            return self._generate_basic_chart(data, chart_type, x, y, title)
     
-    def get_dataset(self, name: str) -> Optional[Dataset]:
+    def _generate_basic_chart(
+        self,
+        data: pd.DataFrame,
+        chart_type: str,
+        x: Optional[Union[str, List[str]]],
+        y: Optional[Union[str, List[str]]],
+        title: Optional[str]
+    ) -> ChartResponse:
         """
-        Obtém um dataset pelo nome.
+        Gera um gráfico simples como fallback.
         
         Args:
-            name: Nome do dataset
+            data: DataFrame com os dados
+            chart_type: Tipo de gráfico
+            x: Coluna(s) para o eixo X
+            y: Coluna(s) para o eixo Y
+            title: Título do gráfico
             
         Returns:
-            Dataset ou None se não encontrado
+            ChartResponse: Objeto de resposta com o gráfico
         """
-        return self.datasets.get(name)
-    
-    def list_datasets(self) -> List[str]:
-        """
-        Lista os nomes de todos os datasets carregados.
+        # Implementação básica (texto) para quando falha a implementação principal
+        message = f"Gráfico do tipo {chart_type} com dados de {len(data)} registros."
         
-        Returns:
-            Lista de nomes de datasets
-        """
-        return list(self.datasets.keys())
+        if x and y:
+            message += f" Eixo X: {x}, Eixo Y: {y}."
+            
+        if title:
+            message += f" Título: {title}."
+            
+        return ChartResponse(value=message)
     
-    def _generate_prompt(self, query: str) -> str:
+    def process_query(self, query: str, retry_count: int = 0, max_retries: int = 3, feedback: str = None) -> BaseResponse:
         """
-        Gera um prompt para o LLM com base na consulta do usuário.
+        Processa uma consulta em linguagem natural e retorna o resultado.
         
         Args:
             query: Consulta em linguagem natural
+            retry_count: Contador de tentativas (para recursão)
+            max_retries: Número máximo de tentativas permitidas
+            feedback: Feedback opcional do usuário sobre consultas anteriores
             
         Returns:
-            Prompt formatado para o LLM
+            BaseResponse: Resposta formatada (DataFrame, Chart, Number, String, etc.)
         """
-        # Adiciona a consulta à memória do agente
-        self.agent_state.memory.add_message(query)
-        
-        # Cria o prompt usando a classe GeneratePythonCodeWithSQLPrompt
-        prompt = GeneratePythonCodeWithSQLPrompt(
-            context=self.agent_state,
-            output_type=self.agent_state.output_type,
-            last_code_generated=self.last_code_generated
-        )
-        
-        # Renderiza o prompt completo
-        rendered_prompt = prompt.render()
-        logger.debug(f"Prompt gerado: {rendered_prompt[:500]}...")
-        
-        return rendered_prompt
-    
-    def process_query(self, query: str, retry_count: int = 0, max_retries: int = 2, feedback: str = None) -> BaseResponse:
-        """
-        Processa uma consulta em linguagem natural.
-        
-        Args:
-            query: Consulta em linguagem natural
-            retry_count: Contador de tentativas de rephrasing (uso interno)
-            max_retries: Número máximo de tentativas antes de oferecer opções alternativas
-            feedback: Feedback do usuário para melhorar a resposta (opcional)
-            
-        Returns:
-            Objeto BaseResponse com o resultado da consulta
-        """
-        logger.info(f"Processando consulta: {query} (tentativa {retry_count+1})")
-        
-        # Se houver feedback do usuário, armazena para uso em futuras melhorias
-        if feedback:
-            self.feedback_manager.store_user_feedback(query, feedback)
-            logger.info(f"Feedback recebido para a consulta: '{feedback}'")
-        
         try:
-            # Cria objeto UserQuery
-            user_query = UserQuery(query)
+            # Aplicar filtragem de segurança na consulta
+            safe_query = self._sanitize_query(query)
             
-            # Verifica se há datasets carregados
-            if not self.datasets:
-                return ErrorResponse("Nenhum dataset carregado. Carregue dados antes de executar consultas.")
+            # Criar objeto de consulta do usuário
+            user_query = UserQuery(safe_query)
             
-            # Verifica menções a dados inexistentes usando o AlternativeFlow
-            missing_entity_response = self.alternative_flow.check_missing_entities(query)
-            if missing_entity_response:
-                return missing_entity_response
+            # Inicializar alternativeFlow se necessário
+            if self.alternative_flow is None and self.datasets:
+                self.alternative_flow = AlternativeFlow(
+                    datasets=self.datasets,
+                    llm_generator=self.query_generator
+                )
             
-            # Gera o prompt para o LLM
-            prompt = self._generate_prompt(query)
+            # Aplicar fluxo alternativo se disponível
+            if self.alternative_flow and not retry_count:
+                # Verifica se a consulta menciona dados ou entidades inexistentes
+                alternative_result = self.alternative_flow.pre_query_check(user_query)
+                if alternative_result:
+                    return alternative_result
             
-            # Gera código Python usando o LLM
-            start_time = time.time()
-            generated_code = self.query_generator.generate_code(prompt)
-            generation_time = time.time() - start_time
-            
-            logger.info(f"Código gerado em {generation_time:.2f}s")
-            self.last_code_generated = generated_code
-            
-            # Contexto para execução inclui os datasets
-            execution_context = {
-                'query': query,
-                'datasets': {name: ds.dataframe for name, ds in self.datasets.items()},
-                'retry_count': retry_count
-            }
-            
-            # Configuração da função execute_sql_query
-            if self.sql_executor and len(self.datasets) > 0:
-                execution_context['execute_sql_query'] = self.sql_executor.create_sql_executor()
-            
-            # Executa o código gerado
-            execution_result = self.code_executor.execute_code(
-                generated_code,
-                context=execution_context,
+            # Preparar o prompt para o LLM
+            prompt_generator = GeneratePythonCodeWithSQLPrompt(
+                datasets=self.datasets,
+                agent_state=self.agent_state,
                 output_type=self.agent_state.output_type
             )
             
-            # Verifica se a execução foi bem-sucedida
-            if not execution_result["success"]:
-                error_msg = execution_result["error"]
-                logger.error(f"Erro na execução de código: {error_msg}")
-                
-                # Verifica se o erro menciona tabelas inexistentes
-                if "tabela" in error_msg.lower() and ("não encontrada" in error_msg.lower() or "não existe" in error_msg.lower()):
-                    return self.alternative_flow.handle_missing_table_error(error_msg)
-                
-                # Se ainda não esgotamos as tentativas
-                if retry_count < max_retries:
-                    # Tenta reformular a consulta
-                    rephrased_query = self.alternative_flow.rephrase_query(query, error_msg)
-                    logger.info(f"Consulta reformulada após erro de execução: {rephrased_query}")
-                    
-                    # Reinicia o processamento com a consulta reformulada
-                    return self.process_query(rephrased_query, retry_count + 1, max_retries)
-                
-                # Se chegou aqui, é o último retry e não conseguimos resolver o problema
-                # Oferece opções predefinidas
-                return self.alternative_flow.offer_predefined_options(query, error_msg)
+            system_message = prompt_generator.generate_system_message()
+            user_message = prompt_generator.generate_user_message(safe_query, feedback)
             
-            # Obtém o resultado da execução
-            result = execution_result["result"]
+            # Gerar código Python para resolver a consulta
+            code = self.query_generator.generate_code(
+                system_message=system_message,
+                user_message=user_message
+            )
             
-            # Valida e processa a resposta
-            try:
-                # Formata o resultado para o formato esperado pelo parser
-                formatted_result = self._format_result_for_parser(result)
-                
-                # Parse a resposta para o tipo apropriado
-                response = self.response_parser.parse(
-                    formatted_result, 
-                    self.last_code_generated
+            # Armazenar o código gerado para referência futura
+            self.last_code_generated = code
+            
+            # Executar o código gerado
+            execution_context = {
+                "datasets": self.datasets,
+                "sql_executor": self.sql_executor,
+                "agent_state": self.agent_state,
+                "agent_memory": self.agent_state.memory
+            }
+            
+            result = self.code_executor.execute_code(code, execution_context)
+            
+            # Interpretar o resultado da execução
+            result = self._format_result_for_parser(result)
+            
+            # Converte o resultado para o tipo de resposta adequado
+            response = self.response_parser.parse_response(result)
+            
+            # Se o resultado for um erro, registra e tenta fluxo alternativo
+            if response.type == "error" and self.alternative_flow and retry_count < max_retries:
+                alternative_result = self.alternative_flow.handle_error(
+                    query=user_query, 
+                    error=response.value, 
+                    code=code
                 )
                 
-                # Armazena a consulta bem-sucedida para uso futuro
-                self.feedback_manager.store_successful_query(query, self.last_code_generated)
+                if alternative_result:
+                    return alternative_result
                 
-                logger.info(f"Consulta processada com sucesso. Tipo de resposta: {response.type}")
-                return response
+                # Se não há resultado alternativo, tenta reformular a consulta
+                rephrased_query = self.alternative_flow.rephrase_query(user_query, response.value)
                 
-            except Exception as e:
-                logger.error(f"Erro ao processar resposta: {str(e)}")
-                
-                # Se ainda temos tentativas disponíveis
-                if retry_count < max_retries:
-                    # Tenta reformular a consulta
-                    rephrased_query = self.alternative_flow.rephrase_query(query, str(e))
-                    logger.info(f"Consulta reformulada após erro de processamento: {rephrased_query}")
+                if rephrased_query and rephrased_query != query:
+                    logger.info(f"Consulta reformulada após exceção: {rephrased_query}")
                     
                     # Reinicia o processamento com a consulta reformulada
                     return self.process_query(rephrased_query, retry_count + 1, max_retries)
-                
-                return ErrorResponse(f"Erro no processamento da resposta: {str(e)}")
-        
+            
+            return response
+            
         except Exception as e:
             logger.error(f"Erro ao processar consulta: {str(e)}")
             
-            # Se ainda temos tentativas disponíveis
-            if retry_count < max_retries:
-                # Tenta reformular a consulta
-                rephrased_query = self.alternative_flow.rephrase_query(query, str(e))
-                logger.info(f"Consulta reformulada após exceção: {rephrased_query}")
+            # Tenta processar com fluxo alternativo
+            if self.alternative_flow and retry_count < max_retries:
+                alternative_result = self.alternative_flow.handle_error(
+                    query=UserQuery(query), 
+                    error=str(e), 
+                    code=self.last_code_generated
+                )
                 
-                # Reinicia o processamento com a consulta reformulada
-                return self.process_query(rephrased_query, retry_count + 1, max_retries)
+                if alternative_result:
+                    return alternative_result
+                
+                # Se não há resultado alternativo, tenta reformular a consulta
+                rephrased_query = self.alternative_flow.rephrase_query(UserQuery(query), str(e))
+                
+                if rephrased_query and rephrased_query != query:
+                    logger.info(f"Consulta reformulada após exceção: {rephrased_query}")
+                    
+                    # Reinicia o processamento com a consulta reformulada
+                    return self.process_query(rephrased_query, retry_count + 1, max_retries)
             
             return ErrorResponse(f"Erro ao processar consulta: {str(e)}")
     
@@ -560,365 +713,44 @@ class AnalysisEngine:
                     return {"type": "chart", "value": filename}
             except:
                 pass
-                
-            # Tentativa genérica para outros tipos
+            
+            # Se não conseguimos identificar, retorna como string
             return {"type": "string", "value": str(result)}
     
-    def execute_direct_query(
-        self, 
-        query: str, 
-        dataset_name: Optional[str] = None
-    ) -> BaseResponse:
+    def _sanitize_query(self, query: str) -> str:
         """
-        Executa uma consulta SQL diretamente em um dataset.
+        Remove conteúdo potencialmente inseguro da consulta.
         
         Args:
-            query: Consulta SQL
-            dataset_name: Nome do dataset alvo (opcional se houver apenas um)
-            
-        Returns:
-            Resultado da consulta
-        """
-        logger.info(f"Executando consulta SQL direta: {query}")
-        
-        try:
-            if not self.sql_executor:
-                return ErrorResponse("Executor SQL não inicializado. Carregue datasets primeiro.")
-                
-            # Usa o SQLExecutor para executar a consulta direta
-            result_df = self.sql_executor.execute_direct_query(query, dataset_name)
-            
-            # Retorna como DataFrameResponse
-            return DataFrameResponse(result_df)
-        
-        except Exception as e:
-            logger.error(f"Erro ao executar consulta SQL: {str(e)}")
-            return ErrorResponse(f"Erro ao executar consulta SQL: {str(e)}")
-    
-    def generate_chart(
-        self, 
-        data: Union[pd.DataFrame, pd.Series], 
-        chart_type: str, 
-        x: Optional[str] = None, 
-        y: Optional[str] = None,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None,
-        chart_format: str = "apex",
-        options: Optional[Dict[str, Any]] = None
-    ) -> ChartResponse:
-        """
-        Gera uma visualização a partir de um DataFrame.
-        
-        Args:
-            data: DataFrame ou Series para visualização
-            chart_type: Tipo de gráfico (bar, line, scatter, hist, pie, area, heatmap, radar)
-            x: Coluna para eixo x (opcional)
-            y: Coluna para eixo y (opcional)
-            title: Título do gráfico (opcional)
-            save_path: Caminho para salvar o gráfico (opcional)
-            chart_format: Formato do gráfico ('image' para matplotlib ou 'apex' para ApexCharts)
-            options: Opções adicionais de customização (opcional)
-            
-        Returns:
-            ChartResponse com a visualização
-        """
-        try:
-            # Verifica o formato do gráfico
-            if chart_format == "apex":
-                return self._generate_apex_chart(data, chart_type, x, y, title, options)
-            elif chart_format == "image":
-                return self._generate_matplotlib_chart(data, chart_type, x, y, title, save_path)
-            else:
-                raise ValueError(f"Formato de gráfico não suportado: {chart_format}")
-        except Exception as e:
-            logger.error(f"Erro ao gerar gráfico: {str(e)}")
-            raise ValueError(f"Falha ao gerar gráfico: {str(e)}")
-    
-    def _generate_matplotlib_chart(
-        self, 
-        data: Union[pd.DataFrame, pd.Series], 
-        chart_type: str, 
-        x: Optional[str] = None, 
-        y: Optional[str] = None,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None
-    ) -> ChartResponse:
-        """
-        Gera uma visualização com matplotlib a partir de um DataFrame.
-        
-        Args:
-            data: DataFrame ou Series para visualização
-            chart_type: Tipo de gráfico (bar, line, scatter, hist, etc.)
-            x: Coluna para eixo x (opcional)
-            y: Coluna para eixo y (opcional)
-            title: Título do gráfico (opcional)
-            save_path: Caminho para salvar o gráfico (opcional)
-            
-        Returns:
-            ChartResponse com a visualização em formato de imagem
-        """
-        import matplotlib.pyplot as plt
-        
-        # Configura o gráfico
-        plt.figure(figsize=(10, 6))
-        
-        # Determina o tipo de gráfico
-        if chart_type == 'bar':
-            if x and y:
-                data.plot(kind='bar', x=x, y=y)
-            else:
-                data.plot(kind='bar')
-        elif chart_type == 'line':
-            if x and y:
-                data.plot(kind='line', x=x, y=y)
-            else:
-                data.plot(kind='line')
-        elif chart_type == 'scatter':
-            if x and y:
-                data.plot(kind='scatter', x=x, y=y)
-            else:
-                # Scatter requer x e y
-                raise ValueError("Scatter plot requer especificação de x e y")
-        elif chart_type == 'hist':
-            if y:
-                data[y].plot(kind='hist')
-            else:
-                data.plot(kind='hist')
-        elif chart_type == 'boxplot':
-            data.boxplot()
-        elif chart_type == 'pie':
-            if y:
-                data.plot(kind='pie', y=y)
-            else:
-                data.plot(kind='pie')
-        else:
-            raise ValueError(f"Tipo de gráfico não suportado para matplotlib: {chart_type}")
-        
-        # Adiciona título se fornecido
-        if title:
-            plt.title(title)
-        
-        # Ajusta o layout
-        plt.tight_layout()
-        
-        # Determina caminho para salvar
-        if not save_path:
-            # Gera nome baseado no tipo e título
-            title_slug = "chart" if not title else title.replace(" ", "_").lower()
-            save_path = f"{title_slug}_{chart_type}.png"
-        
-        # Salva o gráfico
-        plt.savefig(save_path)
-        plt.close()
-        
-        # Retorna resposta com o caminho
-        logger.info(f"Gráfico matplotlib gerado e salvo em: {save_path}")
-        return ChartResponse(save_path, chart_format="image")
-    
-    def _generate_apex_chart(
-        self, 
-        data: Union[pd.DataFrame, pd.Series], 
-        chart_type: str, 
-        x: Optional[str] = None, 
-        y: Optional[str] = None,
-        title: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None
-    ) -> ChartResponse:
-        """
-        Gera uma visualização com ApexCharts a partir de um DataFrame.
-        
-        Args:
-            data: DataFrame ou Series para visualização
-            chart_type: Tipo de gráfico (bar, line, scatter, pie, area, heatmap, radar)
-            x: Coluna para eixo x (opcional)
-            y: Coluna para eixo y (opcional)
-            title: Título do gráfico (opcional)
-            options: Opções adicionais de customização (opcional)
-            
-        Returns:
-            ChartResponse com a configuração JSON do ApexCharts
-        """
-        # Importa o conversor de ApexCharts
-        from utils.chart_converters import ApexChartsConverter
-        
-        # Converte Series para DataFrame se necessário
-        if isinstance(data, pd.Series):
-            data = data.to_frame()
-        
-        # Valida os parâmetros
-        if not isinstance(data, pd.DataFrame):
-            raise ValueError("Os dados devem ser um DataFrame ou Series do pandas")
-        
-        if x is not None and x not in data.columns:
-            raise ValueError(f"Coluna {x} não encontrada no DataFrame")
-        
-        if y is not None and isinstance(y, str) and y not in data.columns:
-            raise ValueError(f"Coluna {y} não encontrada no DataFrame")
-        
-        if y is not None and isinstance(y, list):
-            missing_cols = [col for col in y if col not in data.columns]
-            if missing_cols:
-                raise ValueError(f"Colunas não encontradas no DataFrame: {', '.join(missing_cols)}")
-        
-        # Determina o tipo de gráfico e gera a configuração
-        config = None
-        
-        if chart_type == 'line':
-            if not x or not y:
-                raise ValueError("Gráfico de linhas requer especificação de colunas x e y")
-            config = ApexChartsConverter.convert_line_chart(data, x, y, title, options)
-        
-        elif chart_type == 'bar':
-            if not x or not y:
-                raise ValueError("Gráfico de barras requer especificação de colunas x e y")
-            # Verifica se é um gráfico de barras horizontais
-            horizontal = options.get('horizontal', False) if options else False
-            # Verifica se é um gráfico empilhado
-            stacked = options.get('stacked', False) if options else False
-            config = ApexChartsConverter.convert_bar_chart(data, x, y, title, stacked, horizontal, options)
-        
-        elif chart_type == 'pie':
-            labels_col = x if x else data.columns[0]  # Primeira coluna como labels por padrão
-            values_col = y if y and isinstance(y, str) else data.columns[1] if len(data.columns) > 1 else data.columns[0]
-            # Verifica se é um gráfico de donut
-            donut = options.get('donut', False) if options else False
-            config = ApexChartsConverter.convert_pie_chart(data, labels_col, values_col, title, donut, options)
-        
-        elif chart_type == 'scatter':
-            if not x or not y:
-                raise ValueError("Gráfico de dispersão requer especificação de colunas x e y")
-            # Opcionalmente, permite coluna para tamanho e agrupamento
-            size_col = options.get('size_col', None) if options else None
-            group_col = options.get('group_col', None) if options else None
-            config = ApexChartsConverter.convert_scatter_chart(data, x, y, size_col, group_col, title, options)
-        
-        elif chart_type == 'area':
-            if not x or not y:
-                raise ValueError("Gráfico de área requer especificação de colunas x e y")
-            # Verifica se é um gráfico empilhado
-            stacked = options.get('stacked', False) if options else False
-            config = ApexChartsConverter.convert_area_chart(data, x, y, title, stacked, options)
-        
-        elif chart_type == 'heatmap':
-            if not x or not y:
-                raise ValueError("Mapa de calor requer especificação de colunas x e y")
-            # Requer também uma coluna para os valores
-            values_col = options.get('values_col', None) if options else None
-            if not values_col and len(data.columns) > 2:
-                # Tenta usar a terceira coluna como valores por padrão
-                values_col = data.columns[2]
-            if not values_col:
-                raise ValueError("Mapa de calor requer especificação de coluna para valores")
-            # Opcionalmente, permite uma escala de cores personalizada
-            color_scale = options.get('color_scale', None) if options else None
-            config = ApexChartsConverter.convert_heatmap(data, x, y, values_col, title, color_scale, options)
-        
-        elif chart_type == 'radar':
-            if not x:
-                raise ValueError("Gráfico de radar requer especificação de coluna para categorias")
-            # y pode ser uma coluna ou lista de colunas para séries
-            series_cols = y if y else data.columns[1:] if len(data.columns) > 1 else None
-            if not series_cols:
-                raise ValueError("Gráfico de radar requer pelo menos uma coluna para séries")
-            config = ApexChartsConverter.convert_radar_chart(data, x, series_cols, title, options)
-        
-        else:
-            raise ValueError(f"Tipo de gráfico não suportado para ApexCharts: {chart_type}")
-        
-        # Retorna a resposta com a configuração do gráfico
-        logger.info(f"Configuração ApexCharts gerada para gráfico: {chart_type}")
-        return ChartResponse(config, chart_format="apex")
-    
-    def sanitize_query(self, query: str) -> str:
-        """
-        Sanitiza uma consulta do usuário removendo conteúdo potencialmente perigoso.
-        
-        Args:
-            query: Consulta do usuário
-            
-        Returns:
-            Consulta sanitizada
-        """
-        # Remove comandos SQL perigosos
-        dangerous_patterns = [
-            r'DROP\s+TABLE',
-            r'DELETE\s+FROM',
-            r'TRUNCATE\s+TABLE',
-            r'ALTER\s+TABLE',
-            r'CREATE\s+TABLE',
-            r'UPDATE\s+.+\s+SET',
-            r'INSERT\s+INTO',
-            r'EXECUTE\s+',
-            r'EXEC\s+',
-            r';.*--'
-        ]
-        
-        sanitized_query = query
-        
-        # Verifica e remove padrões perigosos
-        for pattern in dangerous_patterns:
-            import re
-            sanitized_query = re.sub(pattern, "[REMOVIDO]", sanitized_query, flags=re.IGNORECASE)
-        
-        return sanitized_query
-        
-    def generate_analysis(self, result: BaseResponse, query: str) -> str:
-        """
-        Gera uma análise automatizada do resultado de uma consulta.
-        
-        Args:
-            result: Objeto de resposta obtido
             query: Consulta original
             
         Returns:
-            str: Texto com análise do resultado
+            str: Consulta sanitizada
         """
-        if result.type == "dataframe":
-            df = result.value
-            analysis = [f"A consulta retornou {len(df)} registros com {len(df.columns)} colunas."]
+        if not query:
+            return ""
             
-            # Análise adicional se tivermos poucas linhas
-            if len(df) <= 10:
-                analysis.append("Conjunto de resultados pequeno, pode ser necessário expandir a consulta para obter mais dados.")
-                
-            # Verifica valores nulos
-            null_counts = df.isnull().sum()
-            if null_counts.any():
-                cols_with_nulls = [f"{col} ({null_counts[col]} valores)" for col in null_counts.index if null_counts[col] > 0]
-                if cols_with_nulls:
-                    analysis.append(f"Colunas com valores nulos: {', '.join(cols_with_nulls)}")
-                    
-            # Verifica colunas numéricas
-            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            if numeric_cols:
-                # Calcula estatísticas básicas para colunas numéricas
-                stats = df[numeric_cols].describe().to_dict()
-                for col in numeric_cols[:2]:  # Limita a 2 colunas para não sobrecarregar
-                    col_stats = stats[col]
-                    analysis.append(f"Estatísticas para '{col}': Min={col_stats['min']:.2f}, Média={col_stats['mean']:.2f}, Max={col_stats['max']:.2f}")
-            
-            return "\n".join(analysis)
-            
-        elif result.type == "chart":
-            analysis = [f"Visualização gerada com base na consulta: '{query}'."]
-            
-            # Se temos informações de séries no gráfico
-            if result.chart_format == "apex" and isinstance(result.value, dict):
-                config = result.value
-                if "series" in config:
-                    series_count = len(config["series"]) if isinstance(config["series"], list) else 1
-                    analysis.append(f"O gráfico contém {series_count} série(s) de dados.")
-                    
-                if "title" in config and "text" in config["title"]:
-                    analysis.append(f"Título do gráfico: {config['title']['text']}.")
-                    
-            return "\n".join(analysis)
-            
-        elif result.type == "number":
-            return f"O valor numérico obtido foi {result.value}."
-            
-        elif result.type == "string":
-            return f"A resposta obtida é: '{result.value[:100]}{'...' if len(result.value) > 100 else ''}'."
-            
-        else:
-            return f"Consulta processada com sucesso."
+        # Convertemos para string (caso seja outro tipo)
+        sanitized_query = str(query)
+        
+        # Lista de padrões potencialmente inseguros
+        unsafe_patterns = [
+            r'(?:import|from).*(?:os|sys|subprocess|exec|eval)',
+            r'__import__\(',
+            r'open\(.+?,.*?[\'"]w[\'"]',
+            r'exec\(',
+            r'eval\(',
+            r'subprocess',
+            r'sys\.',
+            r'getattr\(',
+            r'setattr\(',
+            r'globals\(\)',
+            r'locals\(\)',
+        ]
+        
+        # Removemos ou substituímos padrões inseguros
+        import re
+        for pattern in unsafe_patterns:
+            sanitized_query = re.sub(pattern, "[REMOVIDO]", sanitized_query, flags=re.IGNORECASE)
+        
+        return sanitized_query

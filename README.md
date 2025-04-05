@@ -19,7 +19,8 @@ O sistema é composto por vários componentes modulares:
 - Suporta diferentes fontes de dados
 - Implementa camada semântica para interpretação de dados
 - Tipos de conectores:
-  - CSV
+  - CSV (padrão e DuckDB)
+  - Excel (XLS/XLSX, padrão e DuckDB)
   - PostgreSQL
   - DuckDB
   - Outros bancos de dados
@@ -87,6 +88,20 @@ Crie um arquivo `datasources.json`:
       "path": "dados/vendas.csv",
       "delimiter": ",",
       "encoding": "utf-8"
+    },
+    {
+      "id": "produtos",
+      "type": "xls",
+      "path": "dados/produtos.xlsx",
+      "sheet_name": "Catálogo",
+      "engine": "openpyxl"
+    },
+    {
+      "id": "vendas_avancado",
+      "type": "duckdb_xls",
+      "path": "dados/vendas_historico.xlsx",
+      "sheet_name": "all",
+      "create_combined_view": true
     }
   ]
 }
@@ -253,6 +268,69 @@ Recentemente realizamos uma refatoração substancial do código para melhorar a
 
 Para mais detalhes sobre a nova arquitetura, consulte a documentação em `core/engine/README.md`.
 
+## Suporte a Arquivos Excel
+
+O sistema agora suporta arquivos Excel (.xls e .xlsx) através de dois tipos de conectores:
+
+### 1. XlsConnector (Processamento simples)
+
+Este conector utiliza pandas para processar arquivos Excel e oferece:
+
+#### Características:
+- Suporte para arquivos .xls e .xlsx
+- Leitura de planilhas específicas ou todas as planilhas
+- Processamento de diretórios com múltiplos arquivos
+- Integração com camada semântica
+- Transformações baseadas em metadados
+
+#### Configuração:
+```json
+{
+  "id": "relatorio_excel",
+  "source_type": "xls",
+  "params": {
+    "path": "/caminho/para/arquivo.xlsx",
+    "sheet_name": 0,  // índice da planilha (0 = primeira) ou nome da planilha
+    "engine": "openpyxl"  // opcional: "openpyxl" para .xlsx, "xlrd" para .xls
+  }
+}
+```
+
+### 2. DuckDBXlsConnector (Processamento avançado)
+
+Este conector utiliza DuckDB para processamento SQL avançado de arquivos Excel:
+
+#### Características adicionais:
+- Processamento SQL eficiente e otimizado
+- Operações avançadas de junção e agregação
+- Performance melhorada para grandes conjuntos de dados
+- Manipulação eficiente de múltiplas planilhas
+- Consolidação inteligente de dados
+
+#### Configuração:
+```json
+{
+  "id": "relatorio_excel_duckdb",
+  "source_type": "duckdb_xls",
+  "params": {
+    "path": "/caminho/para/arquivo.xlsx",
+    "sheet_name": "all",  // usar todas as planilhas
+    "create_combined_view": true  // cria uma visão consolidada de todas as planilhas
+  }
+}
+```
+
+### Parâmetros disponíveis para ambos os conectores:
+- `path`: Caminho para o arquivo ou diretório
+- `sheet_name`: Nome ou índice da planilha (0 = primeira) ou "all" para todas
+- `engine`: Motor a ser usado (openpyxl para .xlsx, xlrd para .xls)
+- `pattern`: Padrão para busca em diretórios (ex: "*.xlsx")
+- `auto_concat`: Se deve concatenar todas as planilhas/arquivos
+
+### Parâmetros específicos para DuckDBXlsConnector:
+- `create_combined_view`: Se deve criar uma visão combinada de todas as planilhas
+- `return_dict`: Se deve retornar um dicionário de DataFrames em vez de um único DataFrame
+
 ## Próximos Passos
 
 - Melhorar a precisão dos modelos de linguagem
@@ -268,6 +346,8 @@ Para mais detalhes sobre a nova arquitetura, consulte a documentação em `core/
 
 docker stop genai-core
 docker rm genai-core
+
+docker build --no-cache -t genai-core:latest .
 
 docker run -d \
   --name genai-core \

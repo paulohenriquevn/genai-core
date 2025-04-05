@@ -58,7 +58,7 @@ class DataSourceConfig:
             self.metadata = None
     
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> 'MetadataEnabledDataSourceConfig':
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'DataSourceConfig':
         """
         Cria uma instância a partir de um dicionário.
         
@@ -66,10 +66,10 @@ class DataSourceConfig:
             config_dict: Dicionário de configuração.
             
         Returns:
-            MetadataEnabledDataSourceConfig: Nova instância.
+            DataSourceConfig: Nova instância.
         """
         source_id = config_dict.get('id')
-        source_type = config_dict.get('type')
+        source_type = config_dict.get('source_type', config_dict.get('type'))
         metadata = config_dict.get('metadata')
         
         if not source_id:
@@ -78,7 +78,7 @@ class DataSourceConfig:
             raise ConfigurationException("Tipo da fonte de dados não especificado")
             
         # Remove chaves especiais
-        params = {k: v for k, v in config_dict.items() if k not in ('id', 'type', 'metadata')}
+        params = {k: v for k, v in config_dict.items() if k not in ('id', 'source_type', 'type', 'metadata')}
         
         return cls(source_id, source_type, metadata=metadata, **params)
     

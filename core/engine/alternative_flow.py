@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Set, Union
 
 from core.engine.dataset import Dataset
 from core.response.string import StringResponse
+from core.user_query import UserQuery
 
 # Configura o logger
 logger = logging.getLogger("core_integration")
@@ -25,16 +26,20 @@ class AlternativeFlow:
     - Tratamento amigável de erros
     """
     
-    def __init__(self, datasets: Dict[str, Dataset], llm_generator=None):
+    def __init__(self, datasets: Dict[str, Dataset], llm_generator=None, feedback_manager=None, sql_executor=None):
         """
         Inicializa o fluxo alternativo.
         
         Args:
             datasets: Dicionário de datasets disponíveis (nome -> objeto Dataset)
             llm_generator: Gerador de código LLM para reformulações
+            feedback_manager: Opcional, gerenciador de feedback
+            sql_executor: Opcional, executor SQL
         """
         self.datasets = datasets
         self.llm_generator = llm_generator
+        self.feedback_manager = feedback_manager
+        self.sql_executor = sql_executor
         self._setup_entity_keywords()
     
     def _setup_entity_keywords(self):
@@ -46,6 +51,28 @@ class AlternativeFlow:
             'departamentos': ['departamento', 'departamentos', 'setor', 'setores', 'área', 'áreas', 'divisão', 'divisões'],
             'categorias': ['categoria', 'categorias', 'classe', 'classes', 'tipo de produto', 'tipos de produto']
         }
+    
+    def update_datasets(self, datasets: Dict[str, Dataset]):
+        """
+        Atualiza a lista de datasets disponíveis.
+        
+        Args:
+            datasets: Novo dicionário de datasets
+        """
+        self.datasets = datasets
+        
+    def pre_query_check(self, user_query) -> Optional[StringResponse]:
+        """
+        Verifica se a consulta tem problemas antes de ser enviada para o LLM.
+        
+        Args:
+            user_query: Objeto UserQuery com a consulta do usuário
+            
+        Returns:
+            StringResponse se houver um problema detectado, None caso contrário
+        """
+        # Verifica se a consulta menciona entidades que não existem nos dados
+        return self.check_missing_entities(user_query.query)
     
     def check_missing_entities(self, query: str) -> Optional[StringResponse]:
         """
@@ -97,6 +124,28 @@ class AlternativeFlow:
         message += "\nPor favor, reformule sua consulta para usar os dados disponíveis."
         
         return StringResponse(message)
+    
+    def handle_error(self, query, error, code=None) -> Optional[StringResponse]:
+        """
+        Tenta gerar uma resposta útil quando ocorre um erro.
+        
+        Args:
+            query: Objeto UserQuery com a consulta do usuário
+            error: String com a mensagem de erro
+            code: Opcional, código que gerou o erro
+            
+        Returns:
+            StringResponse com informações úteis ou None
+        """
+        error_str = str(error).lower()
+        
+        # Tratamentos específicos para diferentes tipos de erros
+        if "no such table" in error_str or "table not found" in error_str:
+            return self.handle_missing_table_error(error_str)
+        
+        # Se chegamos aqui, não temos tratamento específico
+        # Oferece sugestões predefinidas como último recurso
+        return self.offer_predefined_options(query.query if hasattr(query, 'query') else str(query), str(error))
         
     def handle_missing_table_error(self, error_msg: str) -> StringResponse:
         """
@@ -148,54 +197,55 @@ Por favor, reformule sua consulta para usar apenas os datasets listados acima.""
         # Lista de datasets disponíveis
         available_datasets = ', '.join(self.datasets.keys())
         
-        # Cria um prompt para o LLM reformular a consulta
-        rephrase_prompt = f'''Por favor, reformule a seguinte consulta para que ela funcione com os datasets disponíveis.
+        # Colunas disponíveis em cada dataset
+        datasets_columns = {}
+        for name, ds in self.datasets.items():
+            datasets_columns[name] = list(ds.dataframe.columns)
+            
+        # Instrução para reformular a consulta
+        prompt = f"""
+A consulta original "{original_query}" falhou com o seguinte erro:
+{error_info}
 
-CONSULTA ORIGINAL: "{original_query}"
+Por favor, reformule a consulta para evitar este erro.
 
-ERRO ENCONTRADO: {error_info}
+Datasets disponíveis:
+{available_datasets}
 
-DATASETS DISPONÍVEIS: {available_datasets}
+Colunas disponíveis:
+{str(datasets_columns)}
 
-COLUNAS DISPONÍVEIS:
-'''
+Sua reformulação deve:
+1. Usar apenas os datasets e colunas disponíveis
+2. Ser mais simples que a consulta original
+3. Capturar a intenção original do usuário
+
+Reformulação:
+"""
         
-        # Adiciona informações sobre as colunas disponíveis
-        for name, dataset in self.datasets.items():
-            rephrase_prompt += f"\n{name}: {', '.join(dataset.dataframe.columns)}"
-        
-        rephrase_prompt += '''
-
-Sua tarefa é reformular a consulta original para que ela:
-1. Use apenas os datasets e colunas listados acima
-2. Mantenha a intenção original da consulta
-3. Evite os mesmos erros
-4. Seja clara e direta
-
-Por favor, forneça APENAS a consulta reformulada, sem explicações adicionais.'''
-
         try:
-            # Tenta reformular a consulta usando o LLM
-            rephrased_query = self.llm_generator.generate_code(rephrase_prompt)
+            # Usa o gerador LLM para reformular a consulta
+            if hasattr(self.llm_generator, 'generate_rephrased_query'):
+                return self.llm_generator.generate_rephrased_query(prompt)
             
-            # Limpa a resposta, pegando apenas a primeira linha não vazia
-            cleaned_query = re.sub(r'^[\s\'"]*|[\s\'"]*$', '', rephrased_query.split('\n')[0])
+            # Se não tem método específico mas tem generate_text
+            if hasattr(self.llm_generator, 'generate_text'):
+                return self.llm_generator.generate_text(prompt)
+                
+            # Se não tem generate_text, tenta generate_code (não ideal, mas pode funcionar)
+            rephrase_code = self.llm_generator.generate_code(
+                system_message="Você é um assistente que reformula consultas para evitar erros.",
+                user_message=prompt
+            )
             
-            # Se a limpeza resultar em string vazia, use uma linha subsequente
-            if not cleaned_query:
-                for line in rephrased_query.split('\n'):
-                    line = re.sub(r'^[\s\'"]*|[\s\'"]*$', '', line)
-                    if line:
-                        cleaned_query = line
-                        break
-            
-            # Garante que a consulta reformulada não seja o código Python gerado
-            # (às vezes o LLM pode ignorar as instruções)
-            if "import" in cleaned_query or "def " in cleaned_query or "result =" in cleaned_query:
-                # Fallback para uma simplificação da consulta original
-                return self.simplify_query(original_query)
-            
-            return cleaned_query if cleaned_query else original_query
+            # Extrai apenas a reformulação da resposta
+            import re
+            rephrase_match = re.search(r'(?:Reformulação:|```)(.*?)(?:$|```)', rephrase_code, re.DOTALL)
+            if rephrase_match:
+                return rephrase_match.group(1).strip()
+                
+            # Se não conseguiu extrair, retorna o código completo (não ideal)
+            return rephrase_code.strip()
             
         except Exception as e:
             logger.error(f"Erro ao reformular consulta: {str(e)}")
@@ -247,53 +297,43 @@ Por favor, forneça APENAS a consulta reformulada, sem explicações adicionais.
         Gera consultas alternativas baseadas nos datasets disponíveis.
         
         Returns:
-            Lista de consultas sugeridas
+            Lista de consultas alternativas sugeridas
         """
         alternatives = []
         
-        # Consultas básicas para cada dataset
-        for name in self.datasets.keys():
-            alternatives.append(f"Mostre um resumo do dataset {name}")
-            alternatives.append(f"Quais são as principais informações em {name}?")
-        
-        # Consultas mais específicas baseadas nos metadados dos datasets
-        for name, dataset in self.datasets.items():
-            # Consultas baseadas em tipos de colunas
-            if hasattr(dataset, 'column_types'):
-                # Identifica colunas numéricas para agregações
-                numeric_cols = [col for col, type in dataset.column_types.items() 
-                                if type in ['numeric', 'number', 'int', 'float']]
-                
-                # Identifica colunas categóricas para agrupamentos
-                cat_cols = [col for col, type in dataset.column_types.items() 
-                            if type in ['categorical', 'string', 'object']]
-                
-                # Identifica colunas de data para análises temporais
-                date_cols = [col for col, type in dataset.column_types.items() 
-                            if type in ['date', 'datetime']]
-                
-                # Gera consultas para agregações
-                if numeric_cols and cat_cols:
-                    alternatives.append(f"Qual é o total de {numeric_cols[0]} por {cat_cols[0]} em {name}?")
-                
-                # Gera consultas para ordenações
-                if numeric_cols:
-                    alternatives.append(f"Quais são os maiores valores de {numeric_cols[0]} em {name}?")
-                
-                # Gera consultas para análises temporais
-                if date_cols:
-                    alternatives.append(f"Como os dados de {name} variam ao longo do tempo?")
-                    alternatives.append(f"Mostre os dados de {name} agrupados por mês")
+        # Para cada dataset
+        for name, ds in self.datasets.items():
+            # Sugestões baseadas no nome do dataset
+            alternatives.append(f"Mostre os dados de {name}")
+            alternatives.append(f"Quantos registros existem em {name}?")
             
-            # Consultas baseadas em relacionamentos
-            if hasattr(dataset, 'analyzed_metadata') and dataset.analyzed_metadata:
-                if 'relationships' in dataset.analyzed_metadata:
-                    rel_info = dataset.analyzed_metadata.get('relationships', {})
+            # Sugestões baseadas nas colunas numéricas
+            numeric_cols = ds.dataframe.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                for col in numeric_cols[:2]:  # limita a 2 colunas
+                    alternatives.append(f"Qual a média de {col} em {name}?")
+                    alternatives.append(f"Quais são os valores máximo e mínimo de {col} em {name}?")
                     
-                    if 'outgoing' in rel_info and rel_info['outgoing']:
-                        for rel in rel_info['outgoing'][:2]:  # Limita a 2 relacionamentos
-                            target = rel.get('target_dataset')
-                            alternatives.append(f"Mostre dados de {name} relacionados com {target}")
+            # Sugestões baseadas nas colunas de data
+            date_cols = [col for col in ds.dataframe.columns if 'date' in col.lower() or 'data' in col.lower()]
+            if date_cols:
+                for col in date_cols[:1]:  # limita a 1 coluna
+                    alternatives.append(f"Mostre os dados de {name} agrupados por {col}")
+                    
+            # Sugestões de agrupamento
+            categorical_cols = ds.dataframe.select_dtypes(include=['object', 'category']).columns.tolist()
+            if categorical_cols:
+                for col in categorical_cols[:1]:  # limita a 1 coluna
+                    if numeric_cols:
+                        alternatives.append(f"Mostre a média de {numeric_cols[0]} por {col} em {name}")
+                        
+            # Sugestões para buscar tendências/padrões
+            alternatives.append(f"Quais são os principais padrões em {name}?")
+            
+            # Sugestões para explorar relacionamentos entre datasets
+            for target, _ in self.datasets.items():
+                if target != name:
+                    alternatives.append(f"Mostre dados de {name} relacionados com {target}")
         
         # Remove duplicatas e limita a 10 alternativas
         unique_alternatives = list(set(alternatives))

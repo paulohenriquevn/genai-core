@@ -3,10 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uuid
 import os
+import sys
 from typing import Optional, Dict, Any
 import pandas as pd
 import json
 import logging
+
+# Adiciona o diretório raiz ao PYTHONPATH para garantir importações corretas
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Configuração de logging
 logging.basicConfig(
