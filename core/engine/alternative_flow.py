@@ -72,8 +72,7 @@ class AlternativeFlow:
             StringResponse se houver um problema detectado, None caso contrário
         """
         # Verifica se a consulta menciona entidades que não existem nos dados
-        query_text = user_query.value if hasattr(user_query, 'value') else str(user_query)
-        return self.check_missing_entities(query_text)
+        return self.check_missing_entities(user_query.query)
     
     def check_missing_entities(self, query: str) -> Optional[StringResponse]:
         """
@@ -140,22 +139,13 @@ class AlternativeFlow:
         """
         error_str = str(error).lower()
         
-        # Extrai o texto da consulta
-        query_text = ""
-        if hasattr(query, 'value'):
-            query_text = query.value
-        elif hasattr(query, 'query'):
-            query_text = query.query
-        else:
-            query_text = str(query)
-        
         # Tratamentos específicos para diferentes tipos de erros
         if "no such table" in error_str or "table not found" in error_str:
             return self.handle_missing_table_error(error_str)
         
         # Se chegamos aqui, não temos tratamento específico
         # Oferece sugestões predefinidas como último recurso
-        return self.offer_predefined_options(query_text, str(error))
+        return self.offer_predefined_options(query.query if hasattr(query, 'query') else str(query), str(error))
         
     def handle_missing_table_error(self, error_msg: str) -> StringResponse:
         """
@@ -175,23 +165,7 @@ class AlternativeFlow:
         # Lista de datasets disponíveis com suas colunas
         datasets_info = []
         for name, ds in self.datasets.items():
-            # Verifica como obter as colunas do dataset
-            if hasattr(ds, 'dataframe') and hasattr(ds.dataframe, 'columns'):
-                # Dataset normal
-                cols = ", ".join(ds.dataframe.columns[:5]) + ("..." if len(ds.dataframe.columns) > 5 else "")
-            elif hasattr(ds, 'data') and hasattr(ds.data, 'columns'):
-                # Conector com atributo data
-                cols = ", ".join(ds.data.columns[:5]) + ("..." if len(ds.data.columns) > 5 else "")
-            elif hasattr(ds, 'read_data'):
-                # Conector com método read_data
-                try:
-                    data = ds.read_data()
-                    cols = ", ".join(data.columns[:5]) + ("..." if len(data.columns) > 5 else "")
-                except:
-                    cols = "colunas não disponíveis"
-            else:
-                cols = "colunas não disponíveis"
-                
+            cols = ", ".join(ds.dataframe.columns[:5]) + ("..." if len(ds.dataframe.columns) > 5 else "")
             datasets_info.append(f"• {name}: {cols}")
         
         datasets_desc = "\n".join(datasets_info)
@@ -329,76 +303,38 @@ Reformulação:
         
         # Para cada dataset
         for name, ds in self.datasets.items():
-            # Ignorar conectores no dicionário de datasets
-            if name.endswith('_connector'):
-                continue
-                
             # Sugestões baseadas no nome do dataset
             alternatives.append(f"Mostre os dados de {name}")
             alternatives.append(f"Quantos registros existem em {name}?")
             
-            # Tenta acessar as colunas de acordo com o tipo de objeto
-            try:
-                # Prepara para obter os dados dependendo do tipo de objeto
-                dataframe = None
-                
-                if hasattr(ds, 'dataframe'):
-                    # Dataset normal
-                    dataframe = ds.dataframe
-                elif hasattr(ds, 'data') and hasattr(ds.data, 'columns'):
-                    # Conector com atributo data
-                    dataframe = ds.data
-                elif hasattr(ds, 'read_data'):
-                    # Conector com método read_data
-                    try:
-                        dataframe = ds.read_data()
-                    except:
-                        continue
-                
-                if dataframe is None:
-                    continue
-                
-                # Sugestões baseadas nas colunas numéricas
-                numeric_cols = dataframe.select_dtypes(include=['number']).columns.tolist()
-                if numeric_cols:
-                    for col in numeric_cols[:2]:  # limita a 2 colunas
-                        alternatives.append(f"Qual a média de {col} em {name}?")
-                        alternatives.append(f"Quais são os valores máximo e mínimo de {col} em {name}?")
-                        
-                # Sugestões baseadas nas colunas de data
-                date_cols = [col for col in dataframe.columns if 'date' in col.lower() or 'data' in col.lower()]
-                if date_cols:
-                    for col in date_cols[:1]:  # limita a 1 coluna
-                        alternatives.append(f"Mostre os dados de {name} agrupados por {col}")
-                        
-                # Sugestões de agrupamento
-                categorical_cols = dataframe.select_dtypes(include=['object', 'category']).columns.tolist()
-                if categorical_cols:
-                    for col in categorical_cols[:1]:  # limita a 1 coluna
-                        if numeric_cols:
-                            alternatives.append(f"Mostre a média de {numeric_cols[0]} por {col} em {name}")
-            except Exception as e:
-                # Em caso de erro, adiciona apenas uma sugestão simples
-                alternatives.append(f"Faça uma análise simples de {name}")
-                continue
+            # Sugestões baseadas nas colunas numéricas
+            numeric_cols = ds.dataframe.select_dtypes(include=['number']).columns.tolist()
+            if numeric_cols:
+                for col in numeric_cols[:2]:  # limita a 2 colunas
+                    alternatives.append(f"Qual a média de {col} em {name}?")
+                    alternatives.append(f"Quais são os valores máximo e mínimo de {col} em {name}?")
+                    
+            # Sugestões baseadas nas colunas de data
+            date_cols = [col for col in ds.dataframe.columns if 'date' in col.lower() or 'data' in col.lower()]
+            if date_cols:
+                for col in date_cols[:1]:  # limita a 1 coluna
+                    alternatives.append(f"Mostre os dados de {name} agrupados por {col}")
+                    
+            # Sugestões de agrupamento
+            categorical_cols = ds.dataframe.select_dtypes(include=['object', 'category']).columns.tolist()
+            if categorical_cols:
+                for col in categorical_cols[:1]:  # limita a 1 coluna
+                    if numeric_cols:
+                        alternatives.append(f"Mostre a média de {numeric_cols[0]} por {col} em {name}")
                         
             # Sugestões para buscar tendências/padrões
             alternatives.append(f"Quais são os principais padrões em {name}?")
             
             # Sugestões para explorar relacionamentos entre datasets
             for target, _ in self.datasets.items():
-                if target != name and not target.endswith('_connector'):
+                if target != name:
                     alternatives.append(f"Mostre dados de {name} relacionados com {target}")
         
-        # Se não foi possível gerar alternativas, adiciona algumas genéricas
-        if not alternatives:
-            alternatives = [
-                "Mostre um resumo dos dados disponíveis",
-                "Quais são as estatísticas básicas dos dados?",
-                "Mostre as primeiras linhas de cada dataset",
-                "Faça uma análise exploratória dos dados"
-            ]
-            
         # Remove duplicatas e limita a 10 alternativas
         unique_alternatives = list(set(alternatives))
         return unique_alternatives[:10]
