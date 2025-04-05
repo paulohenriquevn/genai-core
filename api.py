@@ -124,10 +124,16 @@ async def process_query(
         
         # Adiciona o valor específico baseado no tipo
         if result.type == "dataframe":
+            # Limita a 25 registros para garantir desempenho
+            df_limited = result.value.head(25) if len(result.value) > 25 else result.value
             # Converte DataFrame para JSON
-            response["data"] = result.value.to_dict(orient="records")
+            response["data"] = df_limited.to_dict(orient="records")
+            # Indica o número total de registros na consulta original
+            response["total_records"] = len(result.value)
             # Adiciona indicador de que uma visualização está disponível
             response["visualization_available"] = True
+            # Adiciona indicador de que o resultado foi limitado
+            response["results_limited"] = len(result.value) > 25
         elif result.type == "chart":
             # Retorna configuração de gráfico
             if hasattr(result, "chart_format") and result.chart_format == "apex":
@@ -138,6 +144,10 @@ async def process_query(
         else:
             # Para string, number e outros tipos
             response["data"] = result.value
+        
+        # Adiciona a consulta SQL como resultado mesmo quando não extraída do código
+        if not sql_query and engine.sql_executor and sql_query is None:
+            response["sql_execute_warning"] = "Consulta SQL não identificada no código gerado"
         
         return JSONResponse(content=response)
     except Exception as e:
