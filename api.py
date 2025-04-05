@@ -114,6 +114,16 @@ async def process_query(
             if sql_matches:
                 sql_query = sql_matches[0]
         
+        # Importa bibliotecas necessárias no escopo global
+        import pandas as pd
+        import numpy as np
+        
+        # Verifica se o usuário solicitou uma visualização
+        visualization_requested = any(keyword in query.lower() for keyword 
+                                    in ['gráfico', 'grafico', 'visualização', 'visualizacao', 
+                                       'visualize', 'plot', 'chart', 'mostrar', 'exibir', 
+                                       'desenhar', 'desenhe'])
+        
         # Prepara resposta com base no tipo de resultado
         response = {
             "type": result.type,
@@ -122,18 +132,105 @@ async def process_query(
             "sql_query": sql_query  # Adiciona a consulta SQL
         }
         
+        # Se o resultado é um dataframe e o usuário pediu visualização, gera também um gráfico
+        chart_result = None
+        if result.type == "dataframe" and visualization_requested:
+            try:
+                # Tenta criar uma visualização automática
+                df = result.value
+                
+                # Determina colunas x e y automaticamente
+                x_column = None
+                y_column = None
+                
+                # Procura a primeira coluna categórica ou de data para x
+                for col in df.columns:
+                    if (df[col].dtype == 'object' or 
+                        pd.api.types.is_datetime64_any_dtype(df[col]) or 
+                        col.lower() in ['data', 'date', 'mes', 'month', 'ano', 'year', 'period', 'período', 'categoria', 'category']):
+                        x_column = col
+                        break
+                
+                # Se ainda não encontrou, usa a primeira coluna
+                if not x_column and not df.empty and df.columns.size > 0:
+                    x_column = df.columns[0]
+                
+                # Procura a primeira coluna numérica para y
+                for col in df.columns:
+                    if (pd.api.types.is_numeric_dtype(df[col]) and 
+                        col != x_column and 
+                        col.lower() not in ['id', 'código', 'code']):
+                        y_column = col
+                        break
+                
+                # Seleciona o tipo de gráfico apropriado
+                if x_column and y_column:
+                    # Determina o tipo de gráfico baseado nos dados
+                    unique_x_values = df[x_column].nunique()
+                    is_time_series = pd.api.types.is_datetime64_any_dtype(df[x_column])
+                    
+                    # Decide o tipo de gráfico
+                    chart_type = 'bar'  # padrão
+                    if is_time_series or (unique_x_values > 10):
+                        chart_type = 'line'
+                    elif unique_x_values <= 10 and len(df) <= 10:
+                        chart_type = 'bar'
+                    
+                    # Gera o título
+                    chart_title = f"{y_column} por {x_column}"
+                    
+                    # Cria o gráfico
+                    chart_result = engine.generate_chart(
+                        data=df,
+                        chart_type=chart_type,
+                        x=x_column,
+                        y=y_column,
+                        title=chart_title,
+                        chart_format="apex"
+                    )
+                    
+                    # Adiciona à resposta
+                    logger.info(f"Visualização automática gerada para a consulta")
+            except Exception as chart_error:
+                logger.warning(f"Erro ao gerar visualização automática: {str(chart_error)}")
+                # Não interrompe o fluxo em caso de erro na visualização
+        
         # Adiciona o valor específico baseado no tipo
         if result.type == "dataframe":
             # Limita a 25 registros para garantir desempenho
             df_limited = result.value.head(25) if len(result.value) > 25 else result.value
-            # Converte DataFrame para JSON
-            response["data"] = df_limited.to_dict(orient="records")
+            # Converte DataFrame para JSON com manipulação de datas
+            records = df_limited.to_dict(orient="records")
+            # Converte Timestamp e outros tipos não serializáveis para strings
+            for record in records:
+                for key, value in record.items():
+                    # Trata objetos pandas.Timestamp
+                    if isinstance(value, pd.Timestamp):
+                        record[key] = value.isoformat()
+                    # Trata numpy.datetime64
+                    elif isinstance(value, np.datetime64):
+                        record[key] = pd.Timestamp(value).isoformat()
+                    # Trata valores não finitos (NaN, Inf, -Inf)
+                    elif isinstance(value, float) and not np.isfinite(value):
+                        record[key] = None
+                    # Trata valores numpy
+                    elif isinstance(value, np.number):
+                        record[key] = value.item()
+                    # Trata outros tipos não serializáveis
+                    elif not isinstance(value, (str, int, float, bool, type(None))):
+                        record[key] = str(value)
+            response["data"] = records
             # Indica o número total de registros na consulta original
             response["total_records"] = len(result.value)
             # Adiciona indicador de que uma visualização está disponível
             response["visualization_available"] = True
             # Adiciona indicador de que o resultado foi limitado
             response["results_limited"] = len(result.value) > 25
+            
+            # Adiciona visualização se foi gerada
+            if chart_result:
+                response["chart"] = chart_result.to_apex_json()
+                response["chart_type"] = "auto_generated"
         elif result.type == "chart":
             # Retorna configuração de gráfico
             if hasattr(result, "chart_format") and result.chart_format == "apex":
@@ -141,8 +238,32 @@ async def process_query(
             else:
                 # Fallback para imagem ou outro formato
                 response["data"] = str(result.value)
+        elif result.type == "number" and visualization_requested:
+            # Para números com pedido de visualização, tenta criar um gráfico simples
+            try:
+                # Cria um dataframe simples com o valor
+                df = pd.DataFrame({"Valor": [result.value]})
+                
+                # Gera um gráfico de barras simples
+                chart_result = engine.generate_chart(
+                    data=df,
+                    chart_type="bar",
+                    x=df.index,
+                    y="Valor",
+                    title=f"Valor: {result.value}",
+                    chart_format="apex"
+                )
+                
+                # Mantém o valor original como dados primários
+                response["data"] = result.value
+                # Adiciona o gráfico
+                response["chart"] = chart_result.to_apex_json()
+                response["chart_type"] = "auto_generated"
+            except Exception as chart_error:
+                logger.warning(f"Erro ao gerar visualização para valor numérico: {str(chart_error)}")
+                response["data"] = result.value
         else:
-            # Para string, number e outros tipos
+            # Para string e outros tipos
             response["data"] = result.value
         
         # Adiciona a consulta SQL como resultado mesmo quando não extraída do código
