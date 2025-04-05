@@ -86,7 +86,7 @@ async def process_query(
 ):
     """
     Processa uma consulta em linguagem natural sobre o arquivo.
-    Retorna o resultado da consulta e uma análise.
+    Retorna o resultado da consulta, uma análise e a consulta SQL executada.
     """
     # Verifica se o ID do arquivo existe
     if file_id not in engines:
@@ -106,11 +106,20 @@ async def process_query(
         session_data[file_id]["last_query"] = query
         session_data[file_id]["last_result"] = result
         
+        # Extrai consulta SQL do código gerado
+        sql_query = None
+        if hasattr(engine, 'last_code_generated') and engine.last_code_generated:
+            import re
+            sql_matches = re.findall(r'execute_sql_query\([\'"](.+?)[\'"]\)', engine.last_code_generated)
+            if sql_matches:
+                sql_query = sql_matches[0]
+        
         # Prepara resposta com base no tipo de resultado
         response = {
             "type": result.type,
             "query": query,
-            "analysis": engine.generate_analysis(result, query)
+            "analysis": engine.generate_analysis(result, query),
+            "sql_query": sql_query  # Adiciona a consulta SQL
         }
         
         # Adiciona o valor específico baseado no tipo
