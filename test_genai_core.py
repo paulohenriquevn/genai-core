@@ -26,7 +26,6 @@ logger = logging.getLogger("test_genai_core")
 from genai_core import GenAICore
 from genai_core.config import Settings
 from genai_core.utils import setup_logging
-from genai_core.nlp.mock_processor import MockNLPProcessor
 
 
 def create_sample_data() -> Dict[str, str]:
@@ -146,15 +145,12 @@ def main() -> int:
         # Ativa o executor SQL com DuckDB
         settings.set("sql_dialect", "duckdb")
         
-        # Cria o processador NLP mock para testes
-        mock_nlp = MockNLPProcessor()
-        
         # Inicializa o sistema GenAI Core
         logger.info("Inicializando GenAI Core")
         genai = GenAICore(settings)
         
-        # Substitui o processador NLP pelo mock para testes
-        genai.nlp_processor._extract_semantic_structure = lambda llm_response, orig_query: mock_nlp.process(orig_query, {"data_sources": {"vendas": {}, "clientes": {}}})
+        # Não é mais necessário substituir o processador NLP,
+        # pois o GenAICore já está configurado para usar o modo mock
         
         # Carrega as fontes de dados
         logger.info("Carregando fontes de dados")

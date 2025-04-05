@@ -138,6 +138,15 @@ class Settings:
         self._configs[key] = value
         logger.info(f"Configuração definida: {key} = {value if 'api_key' not in key else '******'}")
     
+    def get_data_sources(self) -> List[str]:
+        """
+        Obtém a lista de IDs de todas as fontes de dados configuradas.
+        
+        Returns:
+            Lista com os IDs das fontes de dados
+        """
+        return list(self._configs.get("data_sources", {}).keys())
+    
     def get_all_data_sources(self) -> Dict[str, Dict[str, Any]]:
         """
         Obtém todas as fontes de dados configuradas.

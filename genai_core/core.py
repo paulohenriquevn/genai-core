@@ -34,7 +34,11 @@ class GenAICore:
             settings: Configurações do sistema (opcional)
         """
         self.settings = settings or Settings()
-        self.nlp_processor = NLPProcessor(self.settings)
+        
+        # Inicializa o processador NLP com o modelo configurado nas settings
+        model_name = self.settings.get("llm_type", "mock")
+        self.nlp_processor = NLPProcessor(model_name=model_name, settings=self.settings)
+        
         self.sql_generator = SQLGenerator(self.settings)
         self.connectors = {}
         
@@ -54,8 +58,15 @@ class GenAICore:
         logger.info(f"Processando consulta: {query}")
         
         try:
-            # Processa a linguagem natural
-            semantic_structure = self.nlp_processor.process(query, context)
+            # Prepara o schema das fontes de dados para o processador NLP
+            schema = self._prepare_schema_for_nlp()
+            
+            # Se tiver contexto adicional, integra-o ao schema
+            if context and "data_sources" in context:
+                schema["data_sources"].update(context["data_sources"])
+            
+            # Analisa a pergunta usando o processador NLP
+            semantic_structure = self.nlp_processor.parse_question(query, schema)
             
             # Gera o SQL a partir da estrutura semântica
             sql_query = self.sql_generator.generate(semantic_structure)
@@ -161,6 +172,47 @@ class GenAICore:
         connector = self._get_connector(data_source_id)
         
         return data_source_id
+    
+    def _prepare_schema_for_nlp(self) -> Dict[str, Any]:
+        """
+        Prepara informações de schema das fontes de dados para o processador NLP.
+        
+        Returns:
+            Dicionário com informações de schema no formato esperado pelo NLPProcessor
+        """
+        schema = {"data_sources": {}}
+        
+        # Para cada fonte de dados registrada nas configurações
+        for source_id in self.settings.get_data_sources():
+            source_config = self.settings.get_data_source_config(source_id)
+            
+            # Inicializa a estrutura para esta fonte
+            schema["data_sources"][source_id] = {
+                "metadata": {
+                    "type": source_config.get("type", "unknown"),
+                    "description": source_config.get("description", "")
+                },
+                "tables": {}
+            }
+            
+            # Se o conector já estiver inicializado, obtém schema detalhado
+            if source_id in self.connectors:
+                connector = self.connectors[source_id]
+                
+                if hasattr(connector, "get_schema"):
+                    try:
+                        # Obtém o schema do conector
+                        connector_schema = connector.get_schema()
+                        
+                        # Converte para o formato esperado pelo NLP
+                        for table_name, columns in connector_schema.items():
+                            schema["data_sources"][source_id]["tables"][table_name] = {
+                                "columns": columns
+                            }
+                    except Exception as e:
+                        logger.warning(f"Erro ao obter schema de {source_id}: {str(e)}")
+        
+        return schema
     
     def close(self):
         """Fecha todas as conexões e libera recursos."""
