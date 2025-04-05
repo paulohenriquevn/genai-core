@@ -265,3 +265,18 @@ Para mais detalhes sobre a nova arquitetura, consulte a documentação em `core/
 ---
 
 **Desenvolvido com ❤️ por [Paulo Henrique Vieira]**
+
+docker stop genai-core
+docker rm genai-core
+
+docker run -d \
+  --name genai-core \
+  --env-file .env \
+  -p 8000:8000 \
+  genai-core:latest
+
+
+docker ps -a
+
+docker logs -f genai-core
+
