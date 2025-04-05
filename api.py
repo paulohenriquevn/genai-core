@@ -39,6 +39,37 @@ engines: Dict[str, AnalysisEngine] = {}
 # Armazena informações da sessão do usuário
 session_data: Dict[str, Dict[str, Any]] = {}
 
+# Carrega os arquivos existentes ao iniciar a API
+def initialize_engines():
+    available_files = file_manager.list_available_files()
+    for file_info in available_files:
+        try:
+            file_id = file_info["file_id"]
+            if file_id not in engines:
+                # Obtém o caminho do arquivo
+                file_path = file_manager.get_file_path(file_id)
+                if file_path and os.path.exists(file_path):
+                    # Cria uma instância do motor de análise
+                    engine = AnalysisEngine(
+                        model_type="openai",
+                        model_name="gpt-3.5-turbo",
+                        api_key=os.environ.get("OPENAI_API_KEY")
+                    )
+                    # Carrega o arquivo no motor
+                    engine.load_data(
+                        data=file_path,
+                        name="dataset",
+                        description=file_info.get("description") or f"Dados carregados de {file_info.get('filename')}"
+                    )
+                    # Armazena o engine
+                    engines[file_id] = engine
+                    logger.info(f"Engine inicializado para arquivo {file_id}: {file_info.get('filename')}")
+        except Exception as e:
+            logger.error(f"Erro ao inicializar engine para arquivo {file_info.get('file_id')}: {str(e)}")
+
+# Inicializa engines ao iniciar a aplicação
+initialize_engines()
+
 @app.post("/upload/")
 async def upload_file(
     file: UploadFile = File(...),
@@ -51,8 +82,8 @@ async def upload_file(
     # Gera um ID único para o arquivo
     file_id = str(uuid.uuid4())
     
-    # Salva o arquivo com o identificador único
-    file_path = await file_manager.save_file(file, file_id)
+    # Salva o arquivo com o identificador único e descrição
+    file_path = await file_manager.save_file(file, file_id, description)
     
     # Cria uma instância do motor de análise para este arquivo
     engine = AnalysisEngine(
@@ -451,10 +482,72 @@ def _generate_analysis(result, query: str) -> str:
     else:
         return f"Consulta processada com sucesso."
 
+@app.get("/files/")
+async def list_files():
+    """
+    Lista todos os arquivos disponíveis no sistema.
+    """
+    available_files = file_manager.list_available_files()
+    return {"files": available_files}
+
+@app.get("/files/{file_id}")
+async def get_file_info(file_id: str):
+    """
+    Obtém informações detalhadas sobre um arquivo específico.
+    """
+    file_info = file_manager.get_file_info(file_id)
+    if file_info:
+        # Verifica se existe um engine carregado para este arquivo
+        engine_loaded = file_id in engines
+        return {**file_info, "engine_loaded": engine_loaded}
+    
+    raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+
+@app.post("/files/{file_id}/load")
+async def load_file_engine(file_id: str):
+    """
+    Carrega ou recarrega um arquivo existente no engine de análise.
+    """
+    file_info = file_manager.get_file_info(file_id)
+    if not file_info:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    
+    try:
+        # Obtém o caminho do arquivo
+        file_path = file_manager.get_file_path(file_id)
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Arquivo físico não encontrado")
+        
+        # Cria uma instância do motor de análise
+        engine = AnalysisEngine(
+            model_type="openai",
+            model_name="gpt-3.5-turbo",
+            api_key=os.environ.get("OPENAI_API_KEY")
+        )
+        
+        # Carrega o arquivo no motor
+        engine.load_data(
+            data=file_path,
+            name="dataset",
+            description=file_info.get("description") or f"Dados carregados de {file_info.get('filename')}"
+        )
+        
+        # Armazena o engine
+        engines[file_id] = engine
+        
+        return {"status": "success", "message": "Arquivo carregado com sucesso", "file_id": file_id}
+    except Exception as e:
+        logger.error(f"Erro ao carregar arquivo {file_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao carregar arquivo: {str(e)}")
+
 @app.delete("/session/{file_id}")
-async def cleanup_session(file_id: str):
+async def cleanup_session(file_id: str, delete_file: bool = False):
     """
     Remove os recursos associados a uma sessão.
+    
+    Args:
+        file_id: Identificador único do arquivo
+        delete_file: Se True, remove o arquivo físico. Se False, mantém o arquivo para uso futuro.
     """
     if file_id in engines:
         # Remove o engine
@@ -464,11 +557,22 @@ async def cleanup_session(file_id: str):
         if file_id in session_data:
             del session_data[file_id]
         
-        # Remove o arquivo
-        await file_manager.delete_file(file_id)
-        return {"status": "success", "message": "Sessão encerrada com sucesso"}
+        # Remove o arquivo físico apenas se solicitado
+        if delete_file:
+            await file_manager.delete_file(file_id)
+            return {"status": "success", "message": "Sessão encerrada e arquivo removido com sucesso"}
+        else:
+            return {"status": "success", "message": "Sessão encerrada com sucesso (arquivo mantido para uso futuro)"}
     else:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+        # Verifica se o arquivo existe mesmo sem engine
+        file_info = file_manager.get_file_info(file_id)
+        if file_info and delete_file:
+            await file_manager.delete_file(file_id)
+            return {"status": "success", "message": "Arquivo removido com sucesso"}
+        elif file_info:
+            return {"status": "success", "message": "Engine já estava descarregado. Arquivo mantido."}
+        else:
+            raise HTTPException(status_code=404, detail="Sessão e arquivo não encontrados")
 
 if __name__ == "__main__":
     import uvicorn
