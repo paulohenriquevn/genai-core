@@ -1,0 +1,71 @@
+name: Deploy Python App to Hetzner
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          source venv/bin/activate
+          pytest
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Deploy to Hetzner via SSH
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.HETZNER_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e  # Faz o script parar em qualquer erro
+            
+            # Clona o repositório
+            cd /home/deploy
+            if [ ! -d "genai-core/.git" ]; then
+              rm -rf genai-core
+              git clone git@github.com:paulohenriquevn/genai-core.git genai-core
+            fi
+            cd genai-core
+            git reset --hard origin/main
+            git pull origin main
+
+            # Verifica se o Dockerfile existe
+            if [ ! -f "Dockerfile" ]; then
+              echo "Erro: Dockerfile não encontrado!"
+              exit 1
+            fi
+
+            # Constrói a imagem Docker
+            docker build --no-cache -t genai-core:latest .
+
+            # Para e remove o container antigo, se existir
+            docker stop genai-core || true
+            docker rm genai-core || true
+
+            # Executa o novo container
+            docker run -d --name genai-core -p 8000:8000 genai-core:latest
