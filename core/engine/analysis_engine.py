@@ -534,8 +534,12 @@ class AnalysisEngine:
             
             # Aplicar fluxo alternativo se disponível
             if self.alternative_flow and not retry_count:
-                # Verifica se a consulta menciona dados ou entidades inexistentes
-                alternative_result = self.alternative_flow.pre_query_check(user_query)
+                try:
+                    # Verifica se a consulta menciona dados ou entidades inexistentes
+                    alternative_result = self.alternative_flow.pre_query_check(user_query)
+                except Exception as e:
+                    logger.warning(f"Erro no pre_query_check: {str(e)}")
+                    alternative_result = None
                 if alternative_result:
                     return alternative_result
             
