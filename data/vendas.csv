@@ -1,0 +1,6 @@
+data,cliente,produto,categoria,valor,quantidade
+2025-01-01,Cliente A,Produto X,Eletrônicos,100.0,1
+2025-01-02,Cliente B,Produto Y,Móveis,150.0,2
+2025-01-03,Cliente A,Produto Z,Eletrônicos,200.0,1
+2025-01-04,Cliente C,Produto X,Eletrônicos,120.0,3
+2025-01-05,Cliente B,Produto Z,Móveis,180.0,2
