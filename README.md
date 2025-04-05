@@ -1,282 +1,227 @@
-# Sistema de Consulta em Linguagem Natural
+# GenAI Core
+
+Sistema modular para análise de dados com geração de código Python/SQL a partir de linguagem natural.
 
 ## Visão Geral
 
-O Sistema de Consulta em Linguagem Natural é uma solução avançada que permite a análise de dados através de consultas em linguagem natural, eliminando a necessidade de conhecimentos técnicos em SQL ou programação.
+O GenAI Core é um sistema que permite analisar dados através de consultas em linguagem natural, eliminando a necessidade de conhecimentos técnicos em SQL ou programação. O sistema utiliza modelos de linguagem para gerar código Python com SQL que é executado nas fontes de dados conectadas.
 
 ### Principais Características
 
 - **Processamento de Linguagem Natural**: Converte consultas em linguagem natural em código Python/SQL executável
-- **Suporte a Múltiplas Fontes de Dados**: Integração com CSV, bancos de dados, e outras fontes
-- **Visualizações Automáticas**: Geração de gráficos e visualizações de dados
-- **Integração com Modelos de IA**: Utiliza modelos de linguagem para geração de código
+- **Suporte a Múltiplas Fontes de Dados**: Integração com CSV, PostgreSQL e outras fontes
+- **Processamento Otimizado**: Uso de DuckDB para consultas rápidas em arquivos locais
+- **Arquitetura Modular**: Fácil extensão e personalização de componentes
+- **Integração com Modelos de IA**: Utiliza LLMs para geração de código
+- **Visualização de Dados**: Geração automática de gráficos e tabelas
+- **API REST**: Interface para integração com outros sistemas
 
-## Arquitetura do Sistema
+## Estrutura do Projeto
 
-O sistema é composto por vários componentes modulares:
+O projeto segue uma arquitetura modular, com responsabilidades bem definidas:
 
-### 1. Conectores de Dados (`connector/`)
-- Suporta diferentes fontes de dados
-- Implementa camada semântica para interpretação de dados
-- Tipos de conectores:
-  - CSV
-  - PostgreSQL
-  - DuckDB
-  - Outros bancos de dados
+```
+/
+├── api.py                          # API RESTful com FastAPI
+├── natural_language_query_system.py # Interface principal para consultas em linguagem natural
+├── llm_integration.py              # Integração com modelos de linguagem (OpenAI, Anthropic, Hugging Face)
+├── core_integration.py             # Integração entre os componentes principais
+|
+├── core/
+│   ├── engine/
+│   │   ├── analysis_engine.py      # Motor central de análise e processamento
+│   │   ├── sql_executor.py         # Execução de consultas SQL
+│   │   ├── dataset.py              # Gerenciamento de conjuntos de dados
+│   │   └── feedback_manager.py     # Gerenciamento de feedback do usuário
+│   ├── prompts/                    # Templates para interação com LLMs
+│   ├── response/                   # Handlers para diferentes tipos de respostas
+│   └── code_executor.py            # Executor de código Python gerado
+│
+├── connector/
+│   ├── data_connector.py           # Interface base para conectores
+│   ├── csv_connector.py            # Conector para arquivos CSV
+│   ├── postgres_connector.py       # Conector para PostgreSQL
+│   ├── duckdb_csv_connector.py     # Processamento otimizado de CSVs com DuckDB
+│   └── semantic_layer_schema.py    # Esquema para camada semântica
+│
+├── query_builders/                 # Construtores de consultas estruturadas
+│
+└── utils/
+    ├── chart_converters.py         # Conversão para formatos de gráficos (ApexCharts)
+    └── dataset_analyzer.py         # Análise de conjuntos de dados
+```
 
-### 2. Motor de Consulta (`natural_query_engine.py`)
-- Processamento central de consultas
-- Gerenciamento de estado e memória
-- Execução segura de código
-- Geração de respostas
+## Componentes Principais
 
-### 3. Integração com Modelos de Linguagem (`llm_integration.py`)
-- Suporte a múltiplos modelos de IA:
-  - OpenAI (GPT)
-  - Anthropic (Claude)
-  - Hugging Face
-  - Modelos locais
+### 1. Motor de Análise (core/engine/analysis_engine.py)
 
-### 4. Construção de Queries (`query_builders/`)
-- Geração dinâmica de consultas SQL
-- Transformações semânticas
-- Otimização de queries
+O componente central que orquestra todo o fluxo:
+- Recebe consultas em linguagem natural
+- Gerencia a geração de código via LLMs
+- Coordena a execução do código gerado
+- Processa e formata os resultados
 
-### 5. API REST (`api.py`)
-- Endpoints para consultas
-- Upload de dados
-- Gestão de fontes de dados
+### 2. Integração com LLMs (llm_integration.py)
+
+Responsável pela interação com modelos de linguagem:
+- Suporte para múltiplos provedores (OpenAI, Anthropic, Hugging Face)
+- Gera código Python com SQL para responder consultas
+- Adapta prompts conforme o contexto e necessidade
+- Gerencia limitações e erros dos LLMs
+
+### 3. Executor de Código (core/code_executor.py)
+
+Executa o código Python gerado pelo LLM:
+- Ambiente seguro para execução
+- Acesso aos conjuntos de dados carregados
+- Tratamento de erros de execução
+- Conversão de resultados para formatos estruturados
+
+### 4. Conectores de Dados (connector/)
+
+Fornece acesso unificado a diferentes fontes:
+- **DataConnector**: Interface base
+- **CSVConnector**: Arquivos CSV
+- **PostgresConnector**: Bancos PostgreSQL
+- **DuckDBCSVConnector**: Processamento otimizado de arquivos CSV
+- Camada semântica para descrição e transformação de dados
+
+### 5. API RESTful (api.py)
+
+Disponibiliza os recursos do sistema via HTTP:
+- Upload de arquivos
+- Processamento de consultas
+- Gestão de sessões
+- Visualização de resultados
 
 ## Instalação
 
-### Pré-requisitos
-- Python 3.7+
-- Dependências listadas em `requirements.txt`
+### Requisitos
 
-### Passos de Instalação
+- Python 3.8+
+- pandas
+- duckdb (para processamento otimizado de SQL)
+- FastAPI e Uvicorn (para API REST)
+- psycopg2 (opcional, para PostgreSQL)
+- openai/anthropic (para integração com LLMs)
+- matplotlib e ApexCharts (para visualizações)
+
+### Passos
 
 1. Clone o repositório
 ```bash
-git clone https://github.com/seu-usuario/sistema-consulta-linguagem-natural.git
-cd sistema-consulta-linguagem-natural
+git clone https://github.com/seu-usuario/genai-core.git
+cd genai-core
 ```
 
-2. Crie um ambiente virtual
-```bash
-python -m venv venv
-source venv/bin/activate  # No Windows use `venv\Scripts\activate`
-```
-
-3. Instale as dependências
+2. Instale as dependências
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configuração
-
-### Configuração de Fontes de Dados
-
-Crie um arquivo `datasources.json`:
-
-```json
-{
-  "data_sources": [
-    {
-      "id": "vendas",
-      "type": "csv",
-      "path": "dados/vendas.csv",
-      "delimiter": ",",
-      "encoding": "utf-8"
-    }
-  ]
-}
+3. Configure as variáveis de ambiente
+```bash
+# Defina suas chaves de API para LLMs
+export OPENAI_API_KEY=sua-chave-api
+# ou
+export ANTHROPIC_API_KEY=sua-chave-api
 ```
 
-### Configuração de Modelos de Linguagem
+## Uso Básico
 
-Configure em `llm_config.json` ou através de variáveis de ambiente:
+### Como API REST
 
-```json
-{
-  "model_type": "openai",
-  "model_name": "gpt-3.5-turbo",
-  "api_key": "sua_chave_api"
-}
-```
-
-## Uso
-
-### Interface de Linha de Comando
+Inicie o servidor API:
 
 ```bash
-# Inicia o sistema
-python integrated_system.py
-
-# Executa uma consulta específica
-python integrated_system.py --query "Qual é o total de vendas por cliente?"
+python run_api_server.py
 ```
 
-### Exemplo de Código Python
+Acesse a API em `http://localhost:8000` e utilize os endpoints:
+
+- `POST /query`: Processa uma consulta em linguagem natural
+- `POST /upload`: Carrega um arquivo de dados
+- `GET /datasets`: Lista os conjuntos de dados disponíveis
+
+### Como Biblioteca
 
 ```python
-from integrated_system import NaturalLanguageAnalyticSystem
+from natural_language_query_system import NaturalLanguageQuerySystem
 
 # Inicializa o sistema
-system = NaturalLanguageAnalyticSystem()
+nlqs = NaturalLanguageQuerySystem()
 
-# Processa uma consulta
-resultado, tipo = system.process_query("Mostre o total de vendas por cidade")
+# Carrega um arquivo CSV
+dataset_id = nlqs.add_dataset_from_csv("vendas", "data/vendas.csv")
 
-# Exibe o resultado
-print(resultado)
+# Processa uma consulta em linguagem natural
+response = nlqs.process_query("Quais são os 5 produtos mais vendidos?")
+
+# Acesse os resultados
+if response.type == "dataframe":
+    df = response.data
+    print(df)
+elif response.type == "chart":
+    chart = response.data
+    # O chart pode ser renderizado em frontends como JSON para ApexCharts
 ```
-
-### API REST
-
-```bash
-# Inicia o servidor API
-python integrated_system.py --api
-```
-
-Acesse a documentação em `http://localhost:8000/docs`
 
 ## Tipos de Consultas Suportadas
 
-- Consultas básicas (`SELECT`)
-- Agregações (`SUM`, `AVG`, `COUNT`)
-- Agrupamentos (`GROUP BY`)
-- Visualizações (gráficos de barras, linhas, etc.)
-- Análises temporais
-- Junções entre tabelas
+O sistema suporta diversos tipos de consultas, incluindo:
 
-## Exemplos de Consultas
+- **Consultas básicas**: "Mostre todos os clientes de São Paulo"
+- **Agregações**: "Qual é o total de vendas por região?"
+- **Classificações**: "Quais são os 10 produtos mais vendidos?"
+- **Filtros**: "Vendas acima de R$1000 nos últimos 3 meses"
+- **Combinações**: "Quais clientes compraram os produtos da categoria 'Eletrônicos'?"
+- **Visualizações**: "Mostre um gráfico de vendas por mês no formato de barras"
+- **Análises estatísticas**: "Qual é a correlação entre preço e quantidade vendida?"
+- **Previsões simples**: "Projete as vendas para os próximos 3 meses baseado no histórico"
 
-- "Quantos clientes temos por cidade?"
-- "Mostre o total de vendas por mês"
-- "Crie um gráfico de barras com vendas por cliente"
-- "Qual é o impacto financeiro das vendas perdidas?"
+## Fluxo de Processamento
 
-## Testes
+O sistema segue um fluxo bem definido para processar consultas:
 
-Execute os testes usando:
-
-```bash
-python -m testes.run_all_tests --all
-```
-
-## Segurança
-
-- Execução de código em ambiente isolado
-- Sanitização de queries
-- Tratamento de erros
-- Prevenção de injeção de código
+1. **Recebimento da consulta**: O usuário envia uma pergunta em linguagem natural
+2. **Geração de código**: O LLM gera código Python com SQL para responder à consulta
+3. **Execução segura**: O código é executado em um ambiente controlado com acesso aos datasets
+4. **Processamento de resultados**: Os resultados são convertidos para o formato adequado
+5. **Resposta formatada**: Tabelas, gráficos ou texto são retornados ao usuário
 
 ## Extensibilidade
 
-- Adicione novos conectores de dados
-- Integre novos modelos de linguagem
-- Personalize transformações de dados
+O projeto foi projetado para ser facilmente extensível:
 
-## Limitações
-
-- Desempenho depende do modelo de linguagem
-- Consultas muito complexas podem exigir ajustes
-- Qualidade das respostas varia com a qualidade dos dados
-
-## Fluxo Alternativo para Falhas da LLM
-
-O sistema implementa um fluxo robusto para lidar com falhas na geração ou execução de consultas:
-
-### Detecção de Entidades Inexistentes
-- Antes de chamar a LLM, o sistema verifica se a consulta menciona entidades que não existem nos dados
-- Oferece resposta explicativa com alternativas baseadas nos dados disponíveis
-
-### Reformulação Automática
-- Quando uma consulta falha, o sistema tenta reformulá-la automaticamente
-- Adapta conceitos não mapeados para equivalentes disponíveis nos dados
-- Suporta até 3 tentativas de reformulação antes de oferecer alternativas
-
-### Coleta de Feedback do Usuário
-- Permite que o usuário forneça feedback para melhorar a resposta
-- Armazena o feedback para análise e melhorias futuras
-- Usa o feedback para refinar a consulta em tempo real
-
-### Sugestões Predefinidas
-- Após múltiplas falhas, oferece sugestões de consultas alternativas
-- Gera opções baseadas nos datasets e metadados disponíveis
-- Ajuda o usuário a explorar os dados de maneira eficaz
-
-Para testar o fluxo alternativo, execute:
-```bash
-python fallback_flow_example.py
-```
+1. **Novos Conectores**: Adicione suporte a novas fontes de dados implementando a interface `DataConnector`
+2. **Novos Provedores LLM**: Expanda o suporte para modelos adicionais em `llm_integration.py`
+3. **Novos Tipos de Visualização**: Adicione suporte a mais visualizações em `chart_converters.py`
+4. **Respostas Personalizadas**: Implemente novos tipos de resposta na pasta `core/response/`
 
 ## Contribuição
 
+Contribuições são bem-vindas! Por favor, siga estas etapas:
+
 1. Faça um fork do repositório
-2. Crie uma branch para sua feature
-3. Commit suas mudanças
-4. Crie um Pull Request
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
+3. Faça commit das suas mudanças (`git commit -am 'Adiciona nova feature'`)
+4. Envie para a branch (`git push origin feature/nova-feature`)
+5. Crie um Pull Request
 
-## Suporte
+## Segurança
 
-- Abra issues no GitHub
-- Consulte a documentação
-- Entre em contato com o mantenedor
+O sistema implementa várias medidas de segurança:
 
-## Refatoração da Arquitetura (Abril/2025)
+- Execução de código em ambiente isolado
+- Validação e sanitização de entradas
+- Limitação de recursos durante a execução
+- Proteção contra injeção de SQL
+- Acesso restrito a APIs externas
 
-Recentemente realizamos uma refatoração substancial do código para melhorar a manutenibilidade e extensibilidade do sistema. As principais melhorias incluem:
+## Licença
 
-### 1. Aplicação do Princípio de Responsabilidade Única (SRP)
-- O arquivo monolítico `core_integration.py` foi dividido em módulos menores e especializados
-- Cada classe agora tem uma única responsabilidade bem definida
-- Código mais organizado e fácil de entender
-
-### 2. Nova Arquitetura Modular
-- **Dataset**: Gerenciamento de dados e metadados (`core/engine/dataset.py`)
-- **SQLExecutor**: Execução de consultas SQL (`core/engine/sql_executor.py`)
-- **AlternativeFlow**: Tratamento de erros e fluxos alternativos (`core/engine/alternative_flow.py`)
-- **FeedbackManager**: Gestão de feedback e sugestões (`core/engine/feedback_manager.py`)
-- **AnalysisEngine**: Orquestração dos componentes (`core/engine/analysis_engine.py`)
-
-### 3. Interface Simplificada
-- Nova interface de alto nível `NaturalLanguageQuerySystem` para uso facilitado
-- Exemplo de uso em `example_natural_language_query.py`
-- Documentação atualizada em `core/engine/README.md`
-
-### 4. Benefícios da Refatoração
-- Maior testabilidade dos componentes individuais
-- Facilitação da extensão de funcionalidades
-- Melhor organização de dependências
-- Código mais legível e autodocumentado
-
-Para mais detalhes sobre a nova arquitetura, consulte a documentação em `core/engine/README.md`.
-
-## Próximos Passos
-
-- Melhorar a precisão dos modelos de linguagem
-- Adicionar mais tipos de visualizações
-- Expandir suporte a fontes de dados
-- Implementar cache de consultas
-- Desenvolver testes unitários para os novos componentes
-- Adicionar novas funcionalidades usando a arquitetura modular
+Este projeto está licenciado sob a licença MIT - veja o arquivo LICENSE para mais detalhes.
 
 ---
 
-**Desenvolvido com ❤️ por [Paulo Henrique Vieira]**
-
-docker stop genai-core
-docker rm genai-core
-
-docker run -d \
-  --name genai-core \
-  --env-file .env \
-  -p 8000:8000 \
-  genai-core:latest
-
-
-docker ps -a
-
-docker logs -f genai-core
-
+**Desenvolvido por [Paulo Henrique Vieira]**
