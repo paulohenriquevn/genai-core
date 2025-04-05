@@ -141,7 +141,6 @@ Este módulo implementa interfaces para diferentes fontes de dados.
 
 - **DataSourceConfig**: Configuração de fonte de dados com suporte a metadados
 - **DataConnector**: Interface base para todos os conectores
-- **CsvConnector**: Conector para arquivos CSV
 - **PostgresConnector**: Conector para bancos de dados PostgreSQL
 - **DuckDBCsvConnector**: Conector otimizado para CSV usando DuckDB
 - **DataConnectorFactory**: Fábrica para criação de conectores

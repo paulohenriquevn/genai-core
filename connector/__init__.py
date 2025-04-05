@@ -4,7 +4,6 @@ Este módulo fornece interfaces e implementações para acessar diversos tipos d
 """
 
 # Importações relativas explícitas para evitar ambiguidade
-from .csv_connector import CsvConnector
 from .data_connector_factory import DataConnectorFactory
 from .data_connector import DataConnector
 from .datasource_config import DataSourceConfig
@@ -18,7 +17,6 @@ __all__ = [
     "DataConnector",       # Classe abstrata base para conectores
     "DataSourceConfig",    # Configuração de fonte de dados
     "DataConnectorFactory", # Factory para criar conectores
-    "CsvConnector",        # Conector para arquivos CSV
     "PostgresConnector",   # Conector para PostgreSQL
     "DuckDBCsvConnector",  # Conector para DuckDB com CSV
     "ConfigurationException", # Exceção para problemas de configuração

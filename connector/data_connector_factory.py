@@ -27,7 +27,6 @@ class DataConnectorFactory:
     """
     # Map of connector types to their module/class information
     _connector_registry = {
-        'csv': ('connector.csv_connector', 'CsvConnector'),
         'postgres': ('connector.postgres_connector', 'PostgresConnector'),
         'duckdb_csv': ('connector.duckdb_csv_connector', 'DuckDBCsvConnector')
     }
