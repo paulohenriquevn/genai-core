@@ -29,9 +29,7 @@ class DataConnectorFactory:
     _connector_registry = {
         'csv': ('connector.csv_connector', 'CsvConnector'),
         'postgres': ('connector.postgres_connector', 'PostgresConnector'),
-        'duckdb_csv': ('connector.duckdb_csv_connector', 'DuckDBCsvConnector'),
-        'xls': ('connector.xls_connector', 'XlsConnector'),
-        'duckdb_xls': ('connector.duckdb_xls_connector', 'DuckDBXlsConnector')
+        'duckdb_csv': ('connector.duckdb_csv_connector', 'DuckDBCsvConnector')
     }
     
     # Cache of already loaded connector classes
@@ -95,11 +93,7 @@ class DataConnectorFactory:
         """
         # Convert config to DataSourceConfig if necessary
         if not isinstance(config, DataSourceConfig):
-            try:
-                config = DataSourceConfig.from_dict(config)
-            except Exception as e:
-                logger.error(f"Erro ao converter configuração: {str(e)}")
-                raise ValueError(f"Configuração inválida: {str(e)}")
+            config = DataSourceConfig.from_dict(config)
         
         # Create the appropriate connector based on type
         source_type = config.source_type
@@ -241,14 +235,10 @@ def create_view_with_semantic_schema(schema: SemanticSchema,
             # Already a DataFrame
             source_dfs[name] = source
         elif isinstance(source, str) and os.path.exists(source):
-            # A file path - load as CSV or Excel based on extension
+            # A file path - load as CSV
             try:
-                if source.lower().endswith(('.xls', '.xlsx')):
-                    source_dfs[name] = pd.read_excel(source)
-                    logger.info(f"Loaded Excel source {name} from file: {source}")
-                else:
-                    source_dfs[name] = pd.read_csv(source)
-                    logger.info(f"Loaded CSV source {name} from file: {source}")
+                source_dfs[name] = pd.read_csv(source)
+                logger.info(f"Loaded source {name} from file: {source}")
             except Exception as e:
                 logger.error(f"Error loading source {name} from file {source}: {str(e)}")
                 raise ValueError(f"Could not load source {name} from file {source}: {str(e)}")

@@ -4,13 +4,9 @@ Servidor API para o Sistema de Consulta em Linguagem Natural
 """
 
 import os
-import sys
 import uvicorn
 import argparse
 from dotenv import load_dotenv
-
-# Adiciona o diretório raiz ao PYTHONPATH
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # Carrega variáveis de ambiente do arquivo .env
 load_dotenv()

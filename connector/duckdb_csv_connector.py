@@ -3,11 +3,11 @@ import os
 import glob
 import pandas as pd
 import logging
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union
 
 from connector.data_connector import DataConnector
 from connector.datasource_config import DataSourceConfig
-from connector.exceptions import ConfigurationException, DataConnectionException, DataReadException
+from modulo.connector.exceptions import ConfigurationException, DataConnectionException, DataReadException
 
 logging.basicConfig(
     level=logging.INFO,

@@ -20,6 +20,3 @@ anthropic>=0.3.0  # For Claude model integration
 huggingface-hub>=0.10.0  # For HuggingFace model integration
 black>=22.3.0  # For code formatting
 sympy>=1.10.0  # For symbolic mathematics
-openpyxl>=3.1.5  # For Excel XLSX support
-xlrd>=2.0.1  # For Excel XLS support
-pyarrow>=12.0.0  # For Parquet support with DuckDB
