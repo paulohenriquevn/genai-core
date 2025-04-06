@@ -28,7 +28,13 @@ class DataConnectorFactory:
     # Map of connector types to their module/class information
     _connector_registry = {
         'postgres': ('connector.postgres_connector', 'PostgresConnector'),
-        'duckdb_csv': ('connector.duckdb_csv_connector', 'DuckDBCsvConnector')
+        'duckdb': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'csv': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'excel': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'xlsx': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'xls': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'parquet': ('connector.duckdb_connector', 'DuckDBConnector'),
+        'json': ('connector.duckdb_connector', 'DuckDBConnector')
     }
     
     # Cache of already loaded connector classes

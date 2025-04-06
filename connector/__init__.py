@@ -7,7 +7,7 @@ Este módulo fornece interfaces e implementações para acessar diversos tipos d
 from .data_connector_factory import DataConnectorFactory
 from .data_connector import DataConnector
 from .datasource_config import DataSourceConfig
-from .duckdb_csv_connector import DuckDBCsvConnector
+from .duckdb_connector import DuckDBConnector
 from .exceptions import ConfigurationException
 from .metadata import ColumnMetadata, DatasetMetadata
 from .postgres_connector import PostgresConnector
@@ -18,7 +18,7 @@ __all__ = [
     "DataSourceConfig",    # Configuração de fonte de dados
     "DataConnectorFactory", # Factory para criar conectores
     "PostgresConnector",   # Conector para PostgreSQL
-    "DuckDBCsvConnector",  # Conector para DuckDB com CSV
+    "DuckDBConnector",     # Conector para DuckDB com suporte a múltiplos formatos
     "ConfigurationException", # Exceção para problemas de configuração
     "ColumnMetadata",      # Metadados de colunas
     "DatasetMetadata"      # Metadados de datasets

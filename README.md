@@ -39,9 +39,8 @@ O projeto segue uma arquitetura modular, com responsabilidades bem definidas:
 │
 ├── connector/
 │   ├── data_connector.py           # Interface base para conectores
-│   ├── csv_connector.py            # Conector para arquivos CSV
 │   ├── postgres_connector.py       # Conector para PostgreSQL
-│   ├── duckdb_csv_connector.py     # Processamento otimizado de CSVs com DuckDB
+│   ├── duckdb_connector.py         # Conector unificado para múltiplos formatos de arquivo (CSV, Excel, etc.)
 │   └── semantic_layer_schema.py    # Esquema para camada semântica
 │
 ├── query_builders/                 # Construtores de consultas estruturadas
@@ -81,9 +80,8 @@ Executa o código Python gerado pelo LLM:
 
 Fornece acesso unificado a diferentes fontes:
 - **DataConnector**: Interface base
-- **CSVConnector**: Arquivos CSV
 - **PostgresConnector**: Bancos PostgreSQL
-- **DuckDBCSVConnector**: Processamento otimizado de arquivos CSV
+- **DuckDBConnector**: Processamento unificado de arquivos (CSV, Excel, Parquet, JSON)
 - Camada semântica para descrição e transformação de dados
 
 ### 5. API RESTful (api.py)

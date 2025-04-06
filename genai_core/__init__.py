@@ -1,9 +1,4 @@
-"""
-GenAI Core - Sistema de análise de dados com geração de SQL a partir de linguagem natural
-"""
+# Importações do pacote genai_core
 
-__version__ = "0.1.0"
-
+# Importa a classe principal para facilitar o uso
 from genai_core.core import GenAICore
-
-__all__ = ["GenAICore"]
