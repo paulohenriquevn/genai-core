@@ -1,102 +1,192 @@
-# -*- coding: utf-8 -*-
-"""
-Módulo para conectar com bancos de dados PostgreSQL.
-"""
-
-import os
-import logging
 import pandas as pd
-from typing import Dict, Any, Optional, List, Union
+import logging
+from typing import Optional, Dict, Any, Union
 
-# Configuração de logging
+from genai_core.data.connectors.data_connector import DataConnector
+from genai_core.data.connectors.datasource_config import DataSourceConfig
+from genai_core.data.connectors.exceptions import ConfigurationException, DataConnectionException, DataReadException
+
 logger = logging.getLogger(__name__)
 
-
-class PostgresConnector:
+class PostgresConnector(DataConnector):
     """
-    Conector para bancos de dados PostgreSQL.
-    Permite consultar dados diretamente de um banco PostgreSQL.
+    Connector for PostgreSQL databases.
+    
+    Attributes:
+        config: Configuration parameters
+        connection: PostgreSQL connection
+        engine: SQLAlchemy engine
+        schema: Database schema
+        table_name: Main table name
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Union[Dict[str, Any], DataSourceConfig]):
         """
-        Inicializa o conector PostgreSQL.
+        Initialize the PostgreSQL connector.
         
         Args:
-            config: Configuração do conector
-                - host: Host do banco de dados
-                - port: Porta do banco de dados (padrão: 5432)
-                - database: Nome do banco de dados
-                - user: Nome de usuário
-                - password: Senha
-                - schema: Schema do banco (padrão: public)
-                - tables: Lista de tabelas para carregar (opcional)
+            config: Configuration parameters
         """
-        self.config = config
+        # Convert dict to DataSourceConfig if needed
+        if isinstance(config, dict):
+            self.config = DataSourceConfig.from_dict(config)
+        else:
+            self.config = config
+            
         self.connection = None
-        self._connected = False
-        self.tables = {}
+        self.engine = None
+        self.schema = self.config.params.get('schema', 'public')
+        self.table_name = self.config.params.get('table', self.config.params.get('table_name'))
         
-        # Valida a configuração
-        self._validate_config()
+        # Validate required parameters
+        required_params = ['host', 'port', 'database', 'user', 'password']
+        missing_params = [param for param in required_params if param not in self.config.params]
         
-        logger.info(f"PostgresConnector inicializado com host: {self.config.get('host')}, database: {self.config.get('database')}")
-    
-    def _validate_config(self) -> None:
-        """Valida a configuração do conector."""
-        # Implementar validação de configuração
-        pass
+        if missing_params:
+            msg = f"Missing required parameters for PostgreSQL connection: {', '.join(missing_params)}"
+            raise ConfigurationException(msg)
+        
+        if not self.table_name:
+            msg = "Missing 'table' or 'table_name' parameter for PostgreSQL connection"
+            raise ConfigurationException(msg)
     
     def connect(self) -> None:
         """
-        Estabelece conexão com o banco de dados PostgreSQL.
-        """
-        # Implementar conexão com PostgreSQL
-        pass
-    
-    def read_data(self) -> pd.DataFrame:
-        """
-        Lê os dados da tabela principal.
+        Establish connection with PostgreSQL.
         
-        Returns:
-            DataFrame com os dados
-            
         Raises:
-            RuntimeError: Se o conector não estiver conectado
+            DataConnectionException: If connection fails
         """
-        # Implementar leitura de dados
-        pass
+        try:
+            # Import SQLAlchemy
+            import sqlalchemy
+            from sqlalchemy import create_engine
+            
+            # Build connection string
+            host = self.config.params['host']
+            port = self.config.params['port']
+            database = self.config.params['database']
+            user = self.config.params['user']
+            password = self.config.params['password']
+            
+            connection_str = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+            
+            # Create engine
+            self.engine = create_engine(connection_str)
+            
+            # Test connection
+            self.connection = self.engine.connect()
+            logger.info(f"Connected to PostgreSQL: {host}:{port}/{database}")
+            
+        except ImportError as e:
+            msg = "SQLAlchemy not installed. Install with: pip install sqlalchemy psycopg2-binary"
+            logger.error(msg)
+            raise DataConnectionException(msg) from e
+        except Exception as e:
+            msg = f"Error connecting to PostgreSQL: {str(e)}"
+            logger.error(msg)
+            raise DataConnectionException(msg) from e
     
-    def execute_query(self, sql_query: str) -> Dict[str, Any]:
+    def read_data(self, query: Optional[str] = None) -> pd.DataFrame:
         """
-        Executa uma consulta SQL no banco de dados.
+        Read data from PostgreSQL, optionally applying an SQL query.
         
         Args:
-            sql_query: Consulta SQL a ser executada
+            query: Optional SQL query to execute
             
         Returns:
-            Resultado da consulta
+            pd.DataFrame: DataFrame with results
             
         Raises:
-            RuntimeError: Se o conector não estiver conectado
+            DataReadException: If reading fails
         """
-        # Implementar execução de consulta
-        pass
+        if not self.is_connected():
+            self.connect()
+        
+        try:
+            # If no query is provided, select all from the main table
+            if not query:
+                query = f"SELECT * FROM {self.schema}.{self.table_name}"
+            
+            logger.info(f"Executing PostgreSQL query: {query}")
+            
+            # Execute the query
+            result_df = pd.read_sql(query, self.connection)
+            return result_df
+            
+        except Exception as e:
+            msg = f"Error reading data from PostgreSQL: {str(e)}"
+            logger.error(msg)
+            raise DataReadException(msg) from e
     
-    def get_schema(self) -> Dict[str, Dict[str, str]]:
+    def get_schema(self) -> pd.DataFrame:
         """
-        Obtém o schema do banco de dados.
+        Return the schema (structure) of the data.
         
         Returns:
-            Dicionário com o schema (tabela -> {coluna -> tipo})
+            pd.DataFrame: DataFrame with schema information
             
         Raises:
-            RuntimeError: Se o conector não estiver conectado
+            DataConnectionException: If not connected
+            DataReadException: If getting schema fails
         """
-        # Implementar obtenção de schema
-        pass
+        if not self.is_connected():
+            raise DataConnectionException("Not connected to data source. Call connect() first.")
+            
+        try:
+            # Get schema information from information_schema
+            query = f"""
+            SELECT 
+                column_name, 
+                data_type as column_type
+            FROM 
+                information_schema.columns
+            WHERE 
+                table_schema = '{self.schema}'
+                AND table_name = '{self.table_name}'
+            ORDER BY 
+                ordinal_position
+            """
+            
+            return pd.read_sql(query, self.connection)
+            
+        except Exception as e:
+            msg = f"Error getting schema from PostgreSQL: {str(e)}"
+            logger.error(msg)
+            raise DataReadException(msg) from e
     
     def close(self) -> None:
-        """Fecha a conexão e libera recursos."""
-        # Implementar fechamento de conexão
-        pass
+        """
+        Close the PostgreSQL connection.
+        
+        Raises:
+            DataConnectionException: If closing fails
+        """
+        if self.connection:
+            try:
+                self.connection.close()
+                self.engine.dispose()
+                self.connection = None
+                self.engine = None
+                logger.info("PostgreSQL connection closed")
+            except Exception as e:
+                msg = f"Error closing PostgreSQL connection: {str(e)}"
+                logger.warning(msg)
+                raise DataConnectionException(msg) from e
+    
+    def is_connected(self) -> bool:
+        """
+        Check if the connector is active.
+        
+        Returns:
+            bool: True if connected, False otherwise
+        """
+        if not self.connection or not self.engine:
+            return False
+            
+        try:
+            # Check if the connection is active
+            self.connection.execute("SELECT 1")
+            return True
+        except Exception:
+            return False

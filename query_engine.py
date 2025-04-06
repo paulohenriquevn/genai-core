@@ -1,13 +1,22 @@
+"""
+Módulo core.py - Orquestrador do pipeline completo de processamento de consultas em linguagem natural.
+
+Este módulo contém a classe QueryEngine, que coordena a interação entre os componentes 
+do sistema: NLP (processamento de linguagem natural), SQL (geração de consultas) e 
+conectores de dados (execução de consultas).
+"""
+
 import logging
-import os
-from typing import Dict, Any, Optional, Union, List, Type
 import pandas as pd
+from typing import Dict, Any, Optional, Union, List
 
 from genai_core.nlp.nlp_processor import NLPProcessor
 from genai_core.sql.sql_generator import SQLGenerator
-from genai_core.data.connectors.data_connector import DataConnector
+from connector.data_connector import DataConnector
 
+# Configurar logging
 logger = logging.getLogger(__name__)
+
 
 class QueryEngine:
     """
@@ -204,120 +213,37 @@ class QueryEngine:
             logger.warning(f"Erro ao fechar conector: {str(e)}")
 
 
-class GenAICore:
-    """
-    Classe principal do sistema GenAI Core.
-    Gerencia fontes de dados e configurações do sistema.
-    """
-    
-    def __init__(self, settings=None):
-        """
-        Inicializa o sistema GenAI Core.
-        
-        Args:
-            settings: Configurações do sistema
-        """
-        self.settings = settings or {}
-        self.connectors = {}
-        
-        # Inicializa componentes principais
-        self.nlp_processor = NLPProcessor(model=self.settings.get("llm_type", "mock"))
-        self.sql_generator = SQLGenerator(dialect=self.settings.get("sql_dialect", "duckdb"))
-        self.query_engines = {}
-        
-        logger.info("GenAICore inicializado com sucesso")
-        
-    def load_data_source(self, config):
-        """
-        Carrega uma fonte de dados.
-        
-        Args:
-            config: Configuração da fonte de dados
-            
-        Returns:
-            ID da fonte carregada
-        """
-        source_id = config.get("id")
-        if not source_id:
-            raise ValueError("Configuração sem ID")
-        
-        # Importa o factory aqui para evitar import circular
-        from genai_core.data.connectors.data_connector_factory import DataConnectorFactory
-        
-        # Cria o conector apropriado
-        connector = DataConnectorFactory.create_connector(config)
-        self.connectors[source_id] = connector
-        
-        # Cria um QueryEngine para esta fonte
-        engine = QueryEngine(
-            nlp=self.nlp_processor,
-            sql_gen=self.sql_generator,
-            connector=connector,
-            debug_mode=self.settings.get("debug_mode", False)
-        )
-        self.query_engines[source_id] = engine
-            
-        logger.info(f"Fonte de dados {source_id} carregada com sucesso")
-        return source_id
-        
-    def process_query(self, query: str, source_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Processa uma consulta em linguagem natural.
-        
-        Args:
-            query: Consulta em linguagem natural
-            source_id: ID da fonte de dados a consultar (opcional)
-            
-        Returns:
-            Resultado da consulta
-        """
-        logger.info(f"Processando consulta: {query}")
-        
-        try:
-            # Se source_id não for especificado, tenta inferir da consulta
-            if not source_id:
-                # Analisar a pergunta usando o NLP para detectar fonte
-                semantics = self.nlp_processor.parse_question(query, schema={})
-                source_id = semantics.get("data_source", next(iter(self.connectors.keys()), None))
-            
-            # Verifica se temos o conector/engine para essa fonte
-            if not source_id or source_id not in self.query_engines:
-                return {
-                    "success": False, 
-                    "error": f"Fonte de dados '{source_id}' não encontrada ou não especificada",
-                    "type": "error"
-                }
-                
-            # Usa o QueryEngine da fonte selecionada
-            engine = self.query_engines[source_id]
-            result_df = engine.run_query(query)
-            
-            # Converte para o formato de resposta
-            return {
-                "success": True,
-                "type": "table",
-                "data": {
-                    "data": result_df.to_dict(orient="records")
-                }
-            }
-                
-        except Exception as e:
-            logger.error(f"Erro ao processar consulta: {str(e)}")
-            return {
-                "success": False,
-                "type": "error",
-                "error": str(e)
-            }
-    
-    def close(self):
-        """
-        Fecha todos os recursos e conexões.
-        """
-        for engine_id, engine in self.query_engines.items():
-            try:
-                engine.close()
-            except Exception as e:
-                logger.warning(f"Erro ao fechar engine {engine_id}: {str(e)}")
-        
-        self.query_engines = {}
-        self.connectors = {}
+# Exemplo de uso:
+'''
+from genai_core.nlp.nlp_processor import NLPProcessor
+from genai_core.sql.sql_generator import SQLGenerator
+from connector.duckdb_connector import DuckDBConnector
+from connector.datasource_config import DataSourceConfig
+
+# Criar componentes individuais
+nlp = NLPProcessor(model="mock")
+sql_gen = SQLGenerator(dialect="duckdb")
+
+# Configurar conector DuckDB para CSV
+config = DataSourceConfig.from_dict({
+    "source_id": "vendas",
+    "source_type": "duckdb",
+    "params": {
+        "path": "data/vendas.csv",
+        "file_type": "csv"
+    }
+})
+
+connector = DuckDBConnector(config)
+connector.connect()
+
+# Criar o motor de consultas
+engine = QueryEngine(nlp, sql_gen, connector, debug_mode=True)
+
+# Executar uma consulta
+df = engine.run_query("Qual o total de vendas por cliente?")
+print(df)
+
+# Fechar recursos
+engine.close()
+'''

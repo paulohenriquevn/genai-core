@@ -24,73 +24,59 @@ O projeto segue uma arquitetura modular, com responsabilidades bem definidas:
 /
 ├── api.py                          # API RESTful com FastAPI
 ├── natural_language_query_system.py # Interface principal para consultas em linguagem natural
-├── llm_integration.py              # Integração com modelos de linguagem (OpenAI, Anthropic, Hugging Face)
-├── core_integration.py             # Integração entre os componentes principais
+├── run_api_server.py               # Script para iniciar o servidor API
 |
-├── core/
-│   ├── engine/
-│   │   ├── analysis_engine.py      # Motor central de análise e processamento
-│   │   ├── sql_executor.py         # Execução de consultas SQL
-│   │   ├── dataset.py              # Gerenciamento de conjuntos de dados
-│   │   └── feedback_manager.py     # Gerenciamento de feedback do usuário
-│   ├── prompts/                    # Templates para interação com LLMs
-│   ├── response/                   # Handlers para diferentes tipos de respostas
-│   └── code_executor.py            # Executor de código Python gerado
-│
-├── connector/
-│   ├── data_connector.py           # Interface base para conectores
-│   ├── postgres_connector.py       # Conector para PostgreSQL
-│   ├── duckdb_connector.py         # Conector unificado para múltiplos formatos de arquivo (CSV, Excel, etc.)
-│   └── semantic_layer_schema.py    # Esquema para camada semântica
-│
-├── query_builders/                 # Construtores de consultas estruturadas
-│
-└── utils/
-    ├── chart_converters.py         # Conversão para formatos de gráficos (ApexCharts)
-    └── dataset_analyzer.py         # Análise de conjuntos de dados
+├── genai_core/                     # Módulo principal do sistema
+│   ├── __init__.py                 # Inicialização do módulo
+│   ├── core.py                     # Classes principais: GenAICore e QueryEngine
+│   ├── config/                     # Configurações do sistema
+│   │   └── settings.py             # Configurações globais
+│   |
+│   ├── data/                       # Manipulação de dados
+│   │   ├── connectors/             # Conectores para fontes de dados
+│   │   │   ├── data_connector.py   # Interface base para conectores
+│   │   │   ├── data_connector_factory.py # Fábrica de conectores
+│   │   │   ├── duckdb_connector.py # Conector para CSV, Excel, etc. via DuckDB
+│   │   │   ├── postgres_connector.py # Conector para PostgreSQL
+│   │   │   └── test_data_provider.py # Provedor de dados para testes
+│   │   └── ...
+│   |
+│   ├── nlp/                        # Processamento de linguagem natural
+│   │   ├── nlp_processor.py        # Processador de linguagem natural
+│   │   └── mock_processor.py       # Implementação simulada para testes
+│   |
+│   ├── sql/                        # Geração e execução de SQL
+│   │   └── sql_generator.py        # Gerador de consultas SQL
+│   |
+│   └── utils/                      # Utilitários diversos
+│       └── helpers.py              # Funções auxiliares
+|
+└── tests/                          # Testes automatizados
+    └── ...                         # Diversos testes do sistema
 ```
 
 ## Componentes Principais
 
-### 1. Motor de Análise (core/engine/analysis_engine.py)
+### 1. GenAICore e QueryEngine (genai_core/core.py)
 
-O componente central que orquestra todo o fluxo:
-- Recebe consultas em linguagem natural
-- Gerencia a geração de código via LLMs
-- Coordena a execução do código gerado
-- Processa e formata os resultados
+- **GenAICore**: Classe principal que gerencia fontes de dados e orquestra o sistema
+- **QueryEngine**: Motor de consultas que integra NLP, SQL e execução
 
-### 2. Integração com LLMs (llm_integration.py)
+### 2. Conectores de Dados (genai_core/data/connectors/)
 
-Responsável pela interação com modelos de linguagem:
-- Suporte para múltiplos provedores (OpenAI, Anthropic, Hugging Face)
-- Gera código Python com SQL para responder consultas
-- Adapta prompts conforme o contexto e necessidade
-- Gerencia limitações e erros dos LLMs
+- **DataConnector**: Interface base para todos os conectores
+- **DuckDBConnector**: Conector unificado para diversos formatos de arquivo
+- **PostgresConnector**: Conector para bancos PostgreSQL
+- **DataConnectorFactory**: Fábrica para criação dinâmica de conectores
 
-### 3. Executor de Código (core/code_executor.py)
+### 3. NLP e SQL (genai_core/nlp/ e genai_core/sql/)
 
-Executa o código Python gerado pelo LLM:
-- Ambiente seguro para execução
-- Acesso aos conjuntos de dados carregados
-- Tratamento de erros de execução
-- Conversão de resultados para formatos estruturados
+- **NLPProcessor**: Responsável por processar linguagem natural
+- **SQLGenerator**: Gera consultas SQL a partir da estrutura semântica
 
-### 4. Conectores de Dados (connector/)
+### 4. Interface Simplificada (natural_language_query_system.py)
 
-Fornece acesso unificado a diferentes fontes:
-- **DataConnector**: Interface base
-- **PostgresConnector**: Bancos PostgreSQL
-- **DuckDBConnector**: Processamento unificado de arquivos (CSV, Excel, Parquet, JSON)
-- Camada semântica para descrição e transformação de dados
-
-### 5. API RESTful (api.py)
-
-Disponibiliza os recursos do sistema via HTTP:
-- Upload de arquivos
-- Processamento de consultas
-- Gestão de sessões
-- Visualização de resultados
+- **NaturalLanguageQuerySystem**: Fachada para interação com o sistema
 
 ## Instalação
 
@@ -102,7 +88,6 @@ Disponibiliza os recursos do sistema via HTTP:
 - FastAPI e Uvicorn (para API REST)
 - psycopg2 (opcional, para PostgreSQL)
 - openai/anthropic (para integração com LLMs)
-- matplotlib e ApexCharts (para visualizações)
 
 ### Passos
 
@@ -150,71 +135,48 @@ from natural_language_query_system import NaturalLanguageQuerySystem
 nlqs = NaturalLanguageQuerySystem()
 
 # Carrega um arquivo CSV
-dataset_id = nlqs.add_dataset_from_csv("vendas", "data/vendas.csv")
+nlqs.load_data("data/vendas.csv", "vendas")
 
 # Processa uma consulta em linguagem natural
-response = nlqs.process_query("Quais são os 5 produtos mais vendidos?")
+result = nlqs.ask("Quais são os 5 produtos mais vendidos?")
 
 # Acesse os resultados
-if response.type == "dataframe":
-    df = response.data
-    print(df)
-elif response.type == "chart":
-    chart = response.data
-    # O chart pode ser renderizado em frontends como JSON para ApexCharts
+if result["success"]:
+    data = result["data"]["data"]
+    print(data)
 ```
 
-## Tipos de Consultas Suportadas
+## Consultas Exemplo
 
 O sistema suporta diversos tipos de consultas, incluindo:
 
-- **Consultas básicas**: "Mostre todos os clientes de São Paulo"
-- **Agregações**: "Qual é o total de vendas por região?"
-- **Classificações**: "Quais são os 10 produtos mais vendidos?"
-- **Filtros**: "Vendas acima de R$1000 nos últimos 3 meses"
-- **Combinações**: "Quais clientes compraram os produtos da categoria 'Eletrônicos'?"
-- **Visualizações**: "Mostre um gráfico de vendas por mês no formato de barras"
-- **Análises estatísticas**: "Qual é a correlação entre preço e quantidade vendida?"
-- **Previsões simples**: "Projete as vendas para os próximos 3 meses baseado no histórico"
+- "Mostre todos os clientes de São Paulo"
+- "Qual é o total de vendas por região?"
+- "Quais são os 10 produtos mais vendidos?"
+- "Vendas acima de R$1000 nos últimos 3 meses"
+- "Quais clientes compraram os produtos da categoria 'Eletrônicos'?"
+- "Mostre um gráfico de vendas por mês"
 
-## Fluxo de Processamento
+## Desenvolvimento
 
-O sistema segue um fluxo bem definido para processar consultas:
+### Executando Testes
 
-1. **Recebimento da consulta**: O usuário envia uma pergunta em linguagem natural
-2. **Geração de código**: O LLM gera código Python com SQL para responder à consulta
-3. **Execução segura**: O código é executado em um ambiente controlado com acesso aos datasets
-4. **Processamento de resultados**: Os resultados são convertidos para o formato adequado
-5. **Resposta formatada**: Tabelas, gráficos ou texto são retornados ao usuário
+```bash
+python test_query_engine.py
+```
 
-## Extensibilidade
+### Adicionando Novos Conectores
 
-O projeto foi projetado para ser facilmente extensível:
+Para adicionar suporte a uma nova fonte de dados:
 
-1. **Novos Conectores**: Adicione suporte a novas fontes de dados implementando a interface `DataConnector`
-2. **Novos Provedores LLM**: Expanda o suporte para modelos adicionais em `llm_integration.py`
-3. **Novos Tipos de Visualização**: Adicione suporte a mais visualizações em `chart_converters.py`
-4. **Respostas Personalizadas**: Implemente novos tipos de resposta na pasta `core/response/`
+1. Implemente a interface `DataConnector` em um novo arquivo
+2. Registre o conector na fábrica `DataConnectorFactory`
 
-## Contribuição
-
-Contribuições são bem-vindas! Por favor, siga estas etapas:
-
-1. Faça um fork do repositório
-2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
-3. Faça commit das suas mudanças (`git commit -am 'Adiciona nova feature'`)
-4. Envie para a branch (`git push origin feature/nova-feature`)
-5. Crie um Pull Request
-
-## Segurança
-
-O sistema implementa várias medidas de segurança:
-
-- Execução de código em ambiente isolado
-- Validação e sanitização de entradas
-- Limitação de recursos durante a execução
-- Proteção contra injeção de SQL
-- Acesso restrito a APIs externas
+```python
+# Registrar um novo conector
+from genai_core.data.connectors import DataConnectorFactory
+DataConnectorFactory.register_connector('meu_tipo', ('caminho.para.modulo', 'MinhaClasse'))
+```
 
 ## Licença
 
