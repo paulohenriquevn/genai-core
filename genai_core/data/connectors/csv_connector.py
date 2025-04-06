@@ -227,11 +227,15 @@ class CSVConnector:
             logger.debug(f"Consulta SQL normalizada: {sql_query}")
             
             # Determina qual dataframe usar baseado na cláusula FROM
-            from_matches = re.search(r'from\s+(\w+)', sql_query)
+            # Suporta nomes de tabelas com ou sem aspas
+            from_matches = re.search(r'from\s+([\'"]?(\w+)[\'"]?)', sql_query)
             if not from_matches:
                 raise ValueError("Cláusula FROM não encontrada na consulta SQL")
                 
-            table_name = from_matches.group(1)
+            table_name_with_quotes = from_matches.group(1)
+            table_name = from_matches.group(2) if from_matches.group(2) else table_name_with_quotes
+            
+            logger.debug(f"Tabela encontrada: {table_name} (original: {table_name_with_quotes})")
             
             # Mapeia nomes de tabela para dataframes registrados
             if table_name in self.dataframes:
@@ -336,11 +340,19 @@ class CSVConnector:
                         continue
                     
                     # Remove aspas das strings
+                    # Primeiro para o nome da coluna, preserva a original para log
+                    original_col = col
                     col = col.strip("'\"")
+                    
+                    # Para o valor
+                    original_val = val
                     val = val.strip("'\"")
                     
+                    logger.debug(f"Condição decomposta: coluna={col} (original={original_col}), " +
+                                f"operador={op}, valor={val} (original={original_val})")
+                    
                     if col not in result_df.columns:
-                        logger.warning(f"Coluna '{col}' não encontrada no dataframe")
+                        logger.warning(f"Coluna '{col}' não encontrada no dataframe. Colunas disponíveis: {list(result_df.columns)}")
                         continue
                     
                     # Aplica o filtro baseado no operador
@@ -404,10 +416,20 @@ class CSVConnector:
                 else:
                     group_cols = [group_part]
                 
-                # Verifica se as colunas existem
+                # Verifica se as colunas existem e remove aspas se necessário
+                clean_group_cols = []
                 for col in group_cols:
-                    if col not in result_df.columns:
-                        logger.warning(f"Coluna de agrupamento '{col}' não encontrada")
+                    original_col = col
+                    col = col.strip("'\"")
+                    logger.debug(f"Coluna de agrupamento: {col} (original: {original_col})")
+                    
+                    if col in result_df.columns:
+                        clean_group_cols.append(col)
+                    else:
+                        logger.warning(f"Coluna de agrupamento '{col}' não encontrada. Colunas disponíveis: {list(result_df.columns)}")
+                
+                # Usa apenas as colunas válidas para o agrupamento
+                group_cols = clean_group_cols
                 
                 # Se temos agregações no select, executa-as com o groupby
                 if has_aggregation and select_mapping:
@@ -419,13 +441,23 @@ class CSVConnector:
                     
                     # Aplica cada função de agregação
                     for col_expr, (col_name, agg_func, alias) in select_mapping.items():
+                        # Remove aspas das colunas
+                        clean_col_name = col_name.strip("'\"") if isinstance(col_name, str) else col_name
+                        
                         if agg_func == 'sum':
-                            agg_data[alias] = grouped[col_name].sum()
-                        elif agg_func == 'count':
-                            if col_name == '*':
-                                agg_data[alias] = grouped.size()
+                            if clean_col_name in result_df.columns:
+                                agg_data[alias] = grouped[clean_col_name].sum()
                             else:
-                                agg_data[alias] = grouped[col_name].count()
+                                logger.warning(f"Coluna para soma '{clean_col_name}' não encontrada. Usando 0.")
+                                agg_data[alias] = 0
+                        elif agg_func == 'count':
+                            if clean_col_name == '*':
+                                agg_data[alias] = grouped.size()
+                            elif clean_col_name in result_df.columns:
+                                agg_data[alias] = grouped[clean_col_name].count()
+                            else:
+                                logger.warning(f"Coluna para contagem '{clean_col_name}' não encontrada. Usando contagem geral.")
+                                agg_data[alias] = grouped.size()
                     
                     # Converte para DataFrame
                     result_df = pd.DataFrame(agg_data).reset_index(drop=True)
@@ -489,10 +521,15 @@ class CSVConnector:
                         col = col_expr
                         ascending = True
                     
+                    # Remove aspas das colunas
+                    original_col = col
+                    col = col.strip("'\"")
+                    logger.debug(f"Coluna de ordenação: {col} (original: {original_col}), direção: {'ASC' if ascending else 'DESC'}")
+                    
                     if col in result_df.columns:
                         result_df = result_df.sort_values(by=col, ascending=ascending)
                     else:
-                        logger.warning(f"Coluna de ordenação '{col}' não encontrada")
+                        logger.warning(f"Coluna de ordenação '{col}' não encontrada. Colunas disponíveis: {list(result_df.columns)}")
             
             # Aplica LIMIT
             if 'limit' in sql_query:

@@ -39,7 +39,9 @@ class GenAICore:
         model_name = self.settings.get("llm_type", "mock")
         self.nlp_processor = NLPProcessor(model_name=model_name, settings=self.settings)
         
-        self.sql_generator = SQLGenerator(self.settings)
+        # Inicializa o gerador SQL
+        self.sql_generator = SQLGenerator(settings=self.settings)
+        
         self.connectors = {}
         
         logger.info("GenAICore inicializado com sucesso")
@@ -68,8 +70,15 @@ class GenAICore:
             # Analisa a pergunta usando o processador NLP
             semantic_structure = self.nlp_processor.parse_question(query, schema)
             
-            # Gera o SQL a partir da estrutura semântica
-            sql_query = self.sql_generator.generate(semantic_structure)
+            # Gera o SQL a partir da estrutura semântica e do schema
+            sql_query = self.sql_generator.generate_sql(semantic_structure, schema)
+            
+            # Para compatibilidade com código legado, também manter o método generate
+            if hasattr(self.sql_generator, 'generate'):
+                # Verifique se o SQL gerado é diferente e log a diferença
+                legacy_sql = self.sql_generator.generate(semantic_structure)
+                if legacy_sql != sql_query:
+                    logger.info(f"Diferença entre SQL gerado: novo='{sql_query}', legado='{legacy_sql}'")
             
             # Executa a consulta SQL
             result = self.execute_query(sql_query, semantic_structure.get("data_source"))
