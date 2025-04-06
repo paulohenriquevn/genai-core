@@ -1,8 +1,3 @@
-"""
-Gerador de SQL para o GenAI Core.
-Versão simplificada para testes.
-"""
-
 import logging
 from typing import Dict, Any, Optional
 
